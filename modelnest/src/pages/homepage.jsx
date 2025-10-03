@@ -522,8 +522,10 @@ export default function Homepage() {
                   onClick={() => {
                     if (item === 'MarketPlace') {
                       window.location.href = '/marketplace'
-                    } else {
-                      window.location.href = '#'
+                    } else if (item === 'My Models') {
+                      window.location.href = '/mymodels'
+                    }else if (item === 'Deployments') {
+                      window.location.href = '/deploy'
                     }
                   }}
                   className={`hidden md:block ${currentTheme.textSecondary} hover:${

@@ -4,6 +4,9 @@ import Landing from "./pages/landingpage";
 import MainPage from "./pages/homepage";  
 import Authentication from "./pages/auth";
 import Marketplace from './pages/marketplace';
+import ModelDetail from './pages/ModelDetail';
+import MyModels from './pages/mymodel';
+import DeploymentPage from './pages/deploymentpage';
 //Shared Theme and Color Configuration
 const colorScheme = {
     light: {
@@ -92,6 +95,27 @@ function App() {
                         />
                     } 
                 />
+                  <Route 
+                    path="/mymodels" 
+                    element={
+                        <MyModels 
+                            theme={theme} 
+                            currentTheme={currentTheme} 
+                            toggleTheme={toggleTheme} 
+                        />
+                    } 
+                />
+                <Route 
+                    path="/deploy" 
+                    element={
+                        <DeploymentPage 
+                            theme={theme} 
+                            currentTheme={currentTheme} 
+                            toggleTheme={toggleTheme} 
+                        />
+                    } 
+                />
+                 <Route path="/marketplace/:modelName" element={<ModelDetail theme={theme} />} />
             </Routes>
             
         </BrowserRouter>

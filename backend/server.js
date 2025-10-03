@@ -42,6 +42,49 @@ const userSchema = new mongoose.Schema(
 
 const User = mongoose.model("User", userSchema);
 
+/**
+ * @desc Schema for models favorited by a user.
+ */
+const favoriteModelSchema = new mongoose.Schema(
+    {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        modelName: { type: String, required: true },
+        platform: { type: String, required: true },
+        category: { type: String },
+        // Ensure that a user can only favorite a model once
+        unique: { type: String, unique: true } 
+    },
+    { timestamps: true }
+);
+
+// Pre-save hook to create a unique compound index (userId + modelName)
+favoriteModelSchema.pre('save', function(next) {
+    this.unique = `${this.userId.toString()}:${this.modelName}`;
+    next();
+});
+
+const FavoriteModel = mongoose.model("FavoriteModel", favoriteModelSchema);
+
+/**
+ * @desc Schema for custom models trained by a user.
+ */
+const trainedModelSchema = new mongoose.Schema(
+    {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        name: { type: String, required: true, trim: true },
+        description: { type: String },
+        gitUrl: { type: String, required: true }, // GitHub repository URL
+        hfUrl: { type: String }, // Hugging Face model URL (optional)
+        baseModel: { type: String },
+        category: { type: String },
+        status: { type: String, default: 'Deployed' }
+    },
+    { timestamps: true }
+);
+
+const TrainedModel = mongoose.model("TrainedModel", trainedModelSchema);
+
+
 // --- 3. MIDDLEWARE ---
 
 /**
@@ -92,7 +135,7 @@ const generateMockMetrics = (name) => {
 
 // --- 6. ROUTE DEFINITIONS ---
 
-// ======== AUTHENTICATION ROUTES ========
+// ======== AUTHENTICATION ROUTES (Omitted for brevity, assumed functional) ========
 
 /**
  * @route   POST /api/auth/signup
@@ -100,169 +143,118 @@ const generateMockMetrics = (name) => {
  * @access  Public
  */
 app.post("/api/auth/signup", async (req, res) => {
-  try {
-    const { name, email, password, company, role, experience, interests, useCases } = req.body;
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: "Name, email, and password are required." });
+    try {
+      const { name, email, password, company, role, experience, interests, useCases } = req.body;
+      if (!name || !email || !password) {
+        return res.status(400).json({ message: "Name, email, and password are required." });
+      }
+      if (await User.findOne({ email })) {
+        return res.status(400).json({ message: "User with this email already exists" });
+      }
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const newUser = await User.create({ name, email, password: hashedPassword, company, role, experience, interests, useCases });
+      res.status(201).json({ message: "User registered successfully", userId: newUser._id });
+    } catch (err) {
+      console.error("Signup Error:", err);
+      res.status(500).json({ message: "Server error during registration." });
     }
-    if (await User.findOne({ email })) {
-      return res.status(400).json({ message: "User with this email already exists" });
-    }
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = await User.create({ name, email, password: hashedPassword, company, role, experience, interests, useCases });
-    res.status(201).json({ message: "User registered successfully", userId: newUser._id });
-  } catch (err) {
-    console.error("Signup Error:", err);
-    res.status(500).json({ message: "Server error during registration." });
-  }
 });
-
+  
 /**
  * @route   POST /api/auth/signin
  * @desc    Authenticate user and get token
  * @access  Public
  */
 app.post("/api/auth/signin", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email });
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      return res.status(401).json({ message: "Invalid credentials" });
+    try {
+      const { email, password } = req.body;
+      const user = await User.findOne({ email });
+      if (!user || !(await bcrypt.compare(password, user.password))) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+      const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "1d" });
+      res.status(200).json({ token, user: { id: user._id, name: user.name, email: user.email } });
+    } catch (err) {
+      console.error("Signin Error:", err);
+      res.status(500).json({ message: "Server error during sign-in." });
     }
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "1d" });
-    res.status(200).json({ token, user: { id: user._id, name: user.name, email: user.email } });
-  } catch (err) {
-    console.error("Signin Error:", err);
-    res.status(500).json({ message: "Server error during sign-in." });
-  }
 });
 
-// ======== USER PROFILE ROUTES ========
-
-/**
- * @route   GET /api/profile
- * @desc    Get user profile data
- * @access  Private
- */
+// ======== USER PROFILE ROUTES (Omitted for brevity, assumed functional) ========
 app.get('/api/profile', protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user).select('-password');
-    if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json(user);
-  } catch (error) {
-    console.error("Get Profile Error:", error);
-    res.status(500).json({ message: 'Server error' });
-  }
+    try {
+      const user = await User.findById(req.user).select('-password');
+      if (!user) return res.status(404).json({ message: 'User not found' });
+      res.json(user);
+    } catch (error) {
+      console.error("Get Profile Error:", error);
+      res.status(500).json({ message: 'Server error' });
+    }
 });
 
-/**
- * @route   PUT /api/profile
- * @desc    Update user profile data
- * @access  Private
- */
 app.put('/api/profile', protect, async (req, res) => {
-  try {
-    const updateData = {
-        name: req.body.name,
-        email: req.body.email,
-        company: req.body.company,
-        role: req.body.role,
-        experience: req.body.experience,
-        interests: req.body.interests,
-        useCases: req.body.useCases,
-    };
-    // Remove undefined fields so they don't overwrite existing data
-    Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);
-
-    const updatedUser = await User.findByIdAndUpdate(req.user, updateData, { new: true }).select('-password');
-    if (!updatedUser) return res.status(404).json({ message: 'User not found' });
-
-    res.json(updatedUser);
-  } catch (error) {
-    console.error("Update Profile Error:", error);
-    res.status(500).json({ message: "Server error while updating profile." });
-  }
+    try {
+      const updateData = {
+          name: req.body.name,
+          email: req.body.email,
+          company: req.body.company,
+          role: req.body.role,
+          experience: req.body.experience,
+          interests: req.body.interests,
+          useCases: req.body.useCases,
+      };
+      // Remove undefined fields so they don't overwrite existing data
+      Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);
+  
+      const updatedUser = await User.findByIdAndUpdate(req.user, updateData, { new: true }).select('-password');
+      if (!updatedUser) return res.status(404).json({ message: 'User not found' });
+  
+      res.json(updatedUser);
+    } catch (error) {
+      console.error("Update Profile Error:", error);
+      res.status(500).json({ message: "Server error while updating profile." });
+    }
 });
 
-// ======== AI CHAT ROUTE ========
-
-/**
- * @route   POST /api/chat
- * @desc    Proxy chat messages to Hugging Face Inference API
- * @access  Private
- */
-app.post("/api/chat", protect, async (req, res) => {
-  const { message } = req.body;
-  const hfToken = process.env.HUGGING_FACE_TOKEN;
-
-  if (!message) return res.status(400).json({ message: "Message is required." });
-  if (!hfToken) {
-    console.error("Hugging Face token is not configured on the server.");
-    return res.status(500).json({ message: "AI service is not configured." });
-  }
-
-  const systemPrompt = `You are a world-class AI Training Advisor named ModelNest. Your goal is to help users with their AI projects by recommending the perfect models or guiding them on training custom ones. Keep your responses concise, helpful, and friendly. You are powered by Meta Llama.`;
-  const apiUrl = `https://router.huggingface.co/v1/chat/completions`;
-  const payload = {
-      model: "meta-llama/Llama-3.1-8B-Instruct:fireworks-ai",
-      messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": message }],
-      max_tokens: 1024,
-  };
-
-  try {
-    const hfResponse = await axios.post(apiUrl, payload, {
-        headers: { 'Authorization': `Bearer ${hfToken}` }
-    });
-    const aiText = hfResponse.data.choices?.[0]?.message?.content;
-    res.json({ reply: aiText || "Sorry, I couldn't get a proper response." });
-  } catch (error) {
-    console.error("Hugging Face API Error:", error.response ? error.response.data : error.message);
-    res.status(500).json({ message: "AI service is currently unavailable." });
-  }
-});
-
-
-// ======== MODEL MARKETPLACE ROUTE ========
-
-// --- Marketplace Helper Functions ---
+// ======== MODEL MARKETPLACE ROUTING ========
 
 const fetchHuggingFaceModels = async () => {
-  try {
-    const response = await axios.get("https://huggingface.co/api/models?limit=50");
-    return response.data.map(model => ({
-      ...generateMockMetrics(model.modelId),
-      platform: "Hugging Face",
-      name: model.modelId,
-      description: model.cardData?.summary || `A ${model.pipeline_tag || 'general'} model.`,
-      url: `https://huggingface.co/${model.modelId}`,
-      tags: model.tags || [],
-      category: model.pipeline_tag ? model.pipeline_tag.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ') : 'Multimodal',
-    }));
-  } catch (err) {
-    console.warn("Hugging Face fetch failed:", err.message);
-    return [];
-  }
+    try {
+      const response = await axios.get("https://huggingface.co/api/models?limit=50");
+      return response.data.map(model => ({
+        ...generateMockMetrics(model.modelId),
+        platform: "Hugging Face",
+        name: model.modelId,
+        description: model.cardData?.summary || `A ${model.pipeline_tag || 'general'} model.`,
+        url: `https://huggingface.co/${model.modelId}`,
+        tags: model.tags || [],
+        category: model.pipeline_tag ? model.pipeline_tag.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ') : 'Multimodal',
+      }));
+    } catch (err) {
+      console.warn("Hugging Face fetch failed:", err.message);
+      return [];
+    }
 };
 
 const fetchReplicateModels = async () => {
-  if (!process.env.REPLICATE_API_KEY) return [];
-  try {
-    const response = await axios.get("https://api.replicate.com/v1/models", {
-      headers: { Authorization: `Token ${process.env.REPLICATE_API_KEY}` }
-    });
-    return response.data.results.map(model => ({
-      ...generateMockMetrics(model.name),
-      platform: "Replicate",
-      name: model.name.split('/')[1] || model.name,
-      description: model.description || "A model hosted on the Replicate platform.",
-      url: `https://replicate.com/${model.name}`,
-      tags: model.tags || [],
-      category: 'Multimodal',
-    }));
-  } catch (err) {
-    console.warn("Replicate fetch failed:", err.message);
-    return [];
-  }
+    if (!process.env.REPLICATE_API_KEY) return [];
+    try {
+      const response = await axios.get("https://api.replicate.com/v1/models", {
+        headers: { Authorization: `Token ${process.env.REPLICATE_API_KEY}` }
+      });
+      return response.data.results.map(model => ({
+        ...generateMockMetrics(model.name),
+        platform: "Replicate",
+        name: model.name.split('/')[1] || model.name,
+        description: model.description || "A model hosted on the Replicate platform.",
+        url: `https://replicate.com/${model.name}`,
+        tags: model.tags || [],
+        category: 'Multimodal',
+      }));
+    } catch (err) {
+      console.warn("Replicate fetch failed:", err.message);
+      return [];
+    }
 };
 
 const fetchOpenAIModels = async () => {
@@ -323,7 +315,179 @@ app.get('/api/models/marketplace', async (req, res) => {
 });
 
 
+/**
+ * @route   GET /api/models/marketplace/:modelName
+ * @desc    Get a single model's details by name (Uses a regex to capture full name including slashes)
+ * @access  Public
+ */
+// FIXED ROUTE: Using regex object for Express to correctly parse multi-segment paths
+app.get(/^\/api\/models\/marketplace\/(.*)$/, async (req, res) => {
+    try {
+        // req.params[0] will capture the content of the regex group (.*)
+        const modelName = req.params[0]; 
+        
+        // Fetch all models, just like the /marketplace route
+        const results = await Promise.all([
+            fetchHuggingFaceModels(),
+            fetchReplicateModels(),
+            fetchOpenAIModels(),
+            getStaticModels(),
+        ]);
+        const allModels = results.flat();
+        
+        // De-duplicate models and find the one that matches the name
+        const uniqueModels = Array.from(new Map(allModels.map(item => [item.name, item])).values());
+        
+        // Find the model using the modelName
+        const model = uniqueModels.find(m => m.name === modelName);
+
+        if (!model) {
+            return res.status(404).json({ message: "Model not found." });
+        }
+
+        res.json(model);
+    } catch (err) {
+        console.error("Model Details Fetch Error:", err.message);
+        res.status(500).json({ message: "Failed to fetch model details." });
+    }
+});
+
+
+// ======== USER MODEL MANAGEMENT ROUTES ========
+
+/**
+ * @route   POST /api/models/favorite
+ * @desc    Add a model to the user's favorites list
+ * @access  Private
+ */
+app.post('/api/models/favorite', protect, async (req, res) => {
+    const { modelName, platform, category } = req.body;
+
+    if (!modelName || !platform) {
+        return res.status(400).json({ message: "Model name and platform are required." });
+    }
+
+    try {
+        const favorite = new FavoriteModel({
+            userId: req.user,
+            modelName,
+            platform,
+            category: category || 'General'
+        });
+        
+        await favorite.save();
+        res.status(201).json({ message: "Model added to favorites successfully." });
+
+    } catch (error) {
+        // Check for duplicate key error (code 11000 in MongoDB)
+        if (error.code === 11000) {
+            return res.status(409).json({ message: "Model is already in your favorites." });
+        }
+        console.error("Add Favorite Error:", error);
+        res.status(500).json({ message: "Server error while saving favorite." });
+    }
+});
+
+/**
+ * @route   GET /api/models/favorites
+ * @desc    Get all models favorited by the user
+ * @access  Private
+ */
+app.get('/api/models/favorites', protect, async (req, res) => {
+    try {
+        const favorites = await FavoriteModel.find({ userId: req.user }).select('-userId -__v -unique');
+        res.json(favorites);
+    } catch (error) {
+        console.error("Get Favorites Error:", error);
+        res.status(500).json({ message: "Server error while fetching favorites." });
+    }
+});
+
+/**
+ * @route   POST /api/models/trained
+ * @desc    Save a user's custom trained model
+ * @access  Private
+ */
+app.post('/api/models/trained', protect, async (req, res) => {
+    const { name, description, gitUrl, hfUrl, baseModel, category } = req.body;
+
+    if (!name || !gitUrl) {
+        return res.status(400).json({ message: "Model name and GitHub URL are required." });
+    }
+
+    try {
+        const trainedModel = new TrainedModel({
+            userId: req.user,
+            name,
+            description: description || 'No description provided.',
+            gitUrl,
+            hfUrl,
+            baseModel,
+            category
+        });
+        
+        await trainedModel.save();
+        res.status(201).json({ message: "Trained model saved successfully.", model: trainedModel });
+
+    } catch (error) {
+        console.error("Save Trained Model Error:", error);
+        res.status(500).json({ message: "Server error while saving trained model." });
+    }
+});
+
+/**
+ * @route   GET /api/models/trained
+ * @desc    Get all trained models by the user
+ * @access  Private
+ */
+app.get('/api/models/trained', protect, async (req, res) => {
+    try {
+        const trainedModels = await TrainedModel.find({ userId: req.user }).select('-userId -__v');
+        res.json(trainedModels);
+    } catch (error) {
+        console.error("Get Trained Models Error:", error);
+        res.status(500).json({ message: "Server error while fetching trained models." });
+    }
+});
+
+// ======== AI CHAT ROUTE (Omitted for brevity, assumed functional) ========
+
+/**
+ * @route   POST /api/chat
+ * @desc    Proxy chat messages to Hugging Face Inference API
+ * @access  Private
+ */
+app.post("/api/chat", protect, async (req, res) => {
+  const { message } = req.body;
+  const hfToken = process.env.HUGGING_FACE_TOKEN;
+
+  if (!message) return res.status(400).json({ message: "Message is required." });
+  if (!hfToken) {
+    console.error("Hugging Face token is not configured on the server.");
+    return res.status(500).json({ message: "AI service is not configured." });
+  }
+
+  const systemPrompt = `You are a world-class AI Training Advisor named ModelNest. Your goal is to help users with their AI projects by recommending the perfect models or guiding them on training custom ones. Keep your responses concise, helpful, and friendly. You are powered by Meta Llama.`;
+  const apiUrl = `https://router.huggingface.co/v1/chat/completions`;
+  const payload = {
+      model: "meta-llama/Llama-3.1-8B-Instruct:fireworks-ai",
+      messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": message }],
+      max_tokens: 1024,
+  };
+
+  try {
+    const hfResponse = await axios.post(apiUrl, payload, {
+        headers: { 'Authorization': `Bearer ${hfToken}` }
+    });
+    const aiText = hfResponse.data.choices?.[0]?.message?.content;
+    res.json({ reply: aiText || "Sorry, I couldn't get a proper response." });
+  } catch (error) {
+    console.error("Hugging Face API Error:", error.response ? error.response.data : error.message);
+    res.status(500).json({ message: "AI service is currently unavailable." });
+  }
+});
+
+
 // --- 7. SERVER INITIALIZATION ---
 const PORT = process.env.PORT || 8080; // Changed port to 8080
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
-

@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Search, Filter, Zap, Star, Users, TrendingUp, Clock, Shuffle, X, BarChart2, MessageSquare, ChevronDown, ChevronUp, Check, ExternalLink, Box, Sun, Moon, Settings, LogOut, Home } from 'lucide-react';
-
+import { Link } from 'react-router-dom';
 const API_BASE_URL = import.meta.env.VITE_BASE_URL;
 
 const colorScheme = {
@@ -890,16 +890,14 @@ export default function Marketplace({ theme, currentTheme, toggleTheme }) {
                       </div>
 
                       <div className="mt-auto pt-6 text-right">
-                        <a 
-                          href={model.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center space-x-2 px-5 py-2 bg-gradient-to-r from-[#9B59B6] to-[#1E90FF] rounded-full text-sm font-semibold text-white hover:scale-105 transition-all shadow-md hover:shadow-[0_0_15px_rgba(155,89,182,0.6)]"
-                        >
-                          <span>View Model</span>
-                          <ExternalLink className="w-4 h-4" />
-                        </a>
-                      </div>
+  <Link 
+    to={`/marketplace/${encodeURIComponent(model.name)}`}
+    className="inline-flex items-center space-x-2 px-5 py-2 bg-gradient-to-r from-[#9B59B6] to-[#1E90FF] rounded-full text-sm font-semibold text-white hover:scale-105 transition-all shadow-md hover:shadow-[0_0_15px_rgba(155,89,182,0.6)]"
+  >
+    <span>View Model</span>
+    <ExternalLink className="w-4 h-4" />
+  </Link>
+</div>
                     </div>
                   );
                 })}
