@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Sun, Moon, Home, ChevronLeft, Package, Zap, Heart, Cloud, Code, User, Check, AlertTriangle, Loader2, ArrowRight, Github, Lock, Mail, Terminal, BarChart2, Bug } from 'lucide-react';
+import { Sun, Moon, Home, ChevronLeft, Package, Zap, Heart, Cloud, Code, User, Check, AlertTriangle, Loader2, ArrowRight, Github, Lock, Mail, Terminal, BarChart2, Bug, ExternalLink } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vs, atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 const API_BASE_URL = import.meta.env.VITE_BASE_URL;
-
 
 const colorScheme = {
   dark: {
@@ -51,26 +50,44 @@ const downloadFile = (content, filename, mimeType) => {
 
 // Utility function to parse code from markdown blocks
 const extractCode = (response) => {
+    // Note: The backend is now instructed to return requirements.txt first, then app.py, then Dockerfile.
+    // The extraction logic relies on finding the specific markdown block headers.
     const dockerMatch = response.match(/```dockerfile\n([\s\S]*?)\n```/i);
     const pythonMatch = response.match(/```python\n([\s\S]*?)\n```/i);
-    
+    // Matches ```text or ```requirements blocks for requirements.txt
+    const requirementsMatch = response.match(/```text\n([\s\S]*?)\n```/i) || response.match(/```requirements\n([\s\S]*?)\n```/i);
+
     const defaultCode = "# Failed to generate code. Please run step 3.";
 
     return {
         dockerfile: dockerMatch ? dockerMatch[1].trim() : defaultCode,
         pythonCode: pythonMatch ? pythonMatch[1].trim() : defaultCode,
+        requirementsTxt: requirementsMatch ? requirementsMatch[1].trim() : '# fastapi\n# transformers\n# torch\n# Default requirements if AI output format fails', 
     };
 };
 
 // Mock Log Data for Llama Debugging
 const mockBuildLogs = [
-    "Step 1/10 : FROM python:3.9-slim",
+    "Step 1/10 : FROM python:3.9-slim-buster",
     "Step 2/10 : WORKDIR /app",
     "Step 3/10 : COPY requirements.txt .",
     "Step 4/10 : RUN pip install --no-cache-dir -r requirements.txt",
     "ERROR: Could not find a version that satisfies the requirement missing_dep (from versions: none)",
     "ERROR: No matching distribution found for missing_dep",
     "Build failed: Exit code 1"
+];
+
+// Mock Logs for SUCCESS after fix
+const mockSuccessLogs = [
+    "Step 1/10 : FROM python:3.9-slim-buster",
+    "Step 2/10 : WORKDIR /app",
+    "Step 3/10 : COPY requirements.txt .",
+    "Step 4/10 : RUN pip install --no-cache-dir -r requirements.txt",
+    "Successfully installed fastapi transformers torch",
+    "Step 5/10 : COPY app.py .",
+    "Step 6/10 : EXPOSE 8000",
+    "Step 7/10 : CMD ['uvicorn', 'app:app', '--host', '0.0.0.0']",
+    "Build complete: Exit code 0"
 ];
 
 // --- Main Component ---
@@ -87,12 +104,14 @@ export default function DeploymentPage({ theme, toggleTheme }) {
     const [dockerUsername, setDockerUsername] = useState('');
     const [dockerPassword, setDockerPassword] = useState('');
     const [authError, setAuthError] = useState(null);    
-    const [generatedCode, setGeneratedCode] = useState({ dockerfile: '', pythonCode: '' });
+    const [generatedCode, setGeneratedCode] = useState({ dockerfile: '', pythonCode: '', requirementsTxt: '' });
     
     // New granular deployment status
-    const [deploymentStatus, setDeploymentStatus] = useState('idle'); // idle | generating | building | pushing | deploying | failed | complete
+    const [deploymentStatus, setDeploymentStatus] = useState('idle'); // idle | generating | building | pushing | deploying | failed | complete | debugging
     const [deploymentLogs, setDeploymentLogs] = useState([]);
     const [llamaDebugSuggestion, setLlamaDebugSuggestion] = useState(null); // Suggested fix from Llama
+    const [retryCount, setRetryCount] = useState(0); // Tracks auto-retry attempts
+    const MAX_AUTO_RETRIES = 5; // Updated max auto-retries to 5
     
     const currentTheme = colorScheme[theme || 'dark'];
     const isDark = theme === 'dark';
@@ -147,15 +166,15 @@ export default function DeploymentPage({ theme, toggleTheme }) {
             return;
         }
 
-        setDeploymentStatus('deploying');
+        setDeploymentStatus('deploying'); // Use 'deploying' temporarily for API interaction status
         setAuthStatus('pending');
 
         try {
-            // MOCK: Simulate network delay and Docker Hub API call
+            // REALISTIC MOCK: Simulate server-side API call to Docker Hub proxy
             await new Promise(resolve => setTimeout(resolve, 2000));
             
             // MOCK: Simulate successful API token response
-            if (dockerPassword.toLowerCase().includes('dockertoken') || dockerPassword.length > 20) {
+            if (dockerPassword.startsWith('dckr_pat_') || dockerPassword.length > 20) {
                 const token = "DOCKER_HUB_JWT_TOKEN_RECEIVED";
                 
                 // Store the simulated token and user details in session storage for Step 4 consumption
@@ -164,8 +183,7 @@ export default function DeploymentPage({ theme, toggleTheme }) {
 
                 setAuthStatus('authorized');
                 setDeploymentStatus('idle');
-                console.log("Docker Hub Authentication Successful. Token stored securely (simulated).");
-                setCurrentStep(3);
+                setAuthError(null);
             } else {
                 throw new Error("Invalid credentials received from Docker Hub. Check your username and PAT/password.");
             }
@@ -177,7 +195,7 @@ export default function DeploymentPage({ theme, toggleTheme }) {
         }
     };
     
-    // Step 3 Logic: Generate Deployment Code
+    // Step 3 Logic: Generate Deployment Code - NOW USES DEDICATED API ENDPOINT
     const handleGenerateCode = useCallback(async (isRetry = false) => {
         if (!selectedModel) return;
 
@@ -187,34 +205,42 @@ export default function DeploymentPage({ theme, toggleTheme }) {
         const modelIdentifier = selectedModel.modelName || selectedModel.name; 
         const platform = selectedModel.platform || 'Custom/Hugging Face'; 
         const authenticatedUsername = sessionStorage.getItem('dockerUsername') || dockerUsername; 
-
-        let userPrompt = `Generate a production-ready Dockerfile and a Python (FastAPI) deployment file (app.py) for the model named "${modelIdentifier}" from the source ${platform}. 
-The generated Dockerfile MUST use the Docker Hub username "${authenticatedUsername}" in a comment or placeholder to define the final image tag (e.g., # Image tag: ${authenticatedUsername}/${modelIdentifier}:latest).
-The Python file MUST include FastAPI code that initializes the model, exposes a POST endpoint for inference, and is ready for production use. 
-IMPORTANT: Provide the Dockerfile inside a \`\`\`dockerfile\n...\n\`\`\` block and the Python code inside a \`\`\`python\n...\n\`\`\` block. 
-DO NOT include any text, explanations, or formatting outside these two code blocks.`;
-
-        if (isRetry && llamaDebugSuggestion) {
-            // Add Llama's suggested fix to the prompt for code regeneration
-            userPrompt += `\n\n[RETRY REQUEST]: A previous build failed with dependency issues. Please ensure the Dockerfile includes the following dependency or fix: ${llamaDebugSuggestion.fixSuggestion}`;
+        
+        // Determine the source URL if it's a trained model
+        let modelSourceDetail = '';
+        if (selectedModel.isTrained) {
+            if (selectedModel.gitUrl) {
+                modelSourceDetail += `\n- The source code is available at the GitHub URL: ${selectedModel.gitUrl}. The Dockerfile MUST use 'git clone' to fetch this repository.`;
+            } else if (selectedModel.hfUrl) {
+                modelSourceDetail += `\n- The source model repository is available at the Hugging Face URL: ${selectedModel.hfUrl}.`;
+            }
         }
 
+        const payload = {
+            modelIdentifier,
+            platform,
+            authenticatedUsername,
+            modelSourceDetail,
+            isRetry,
+            llamaDebugSuggestion: isRetry ? llamaDebugSuggestion : null // Pass suggestion only on retry
+        };
 
         try {
-            const response = await fetch(`${API_BASE_URL}/api/chat`, {
+            // CALL NEW DEDICATED API ENDPOINT
+            const response = await fetch(`${API_BASE_URL}/api/deployment/generate-code`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ message: userPrompt })
+                body: JSON.stringify(payload)
             });
 
             if (!response.ok) throw new Error('AI service failed to generate code.');
 
             const result = await response.json();
-            const aiText = result.reply || "Error: No reply received.";
+            const aiText = result.generatedCode || "Error: No reply received.";
             
             const extracted = extractCode(aiText);
             setGeneratedCode(extracted);
-            setLlamaDebugSuggestion(null); // Clear suggestion on success
+            setLlamaDebugSuggestion(null); // Clear suggestion on successful code generation
             setCurrentStep(4);
             
         } catch (error) {
@@ -227,78 +253,95 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
     
     // Step 4 Logic: Build, Push, and Deploy E2E Flow
     const handleE2EDeployment = () => {
+        // Clear logs and set status to building
         setDeploymentLogs([]);
-        setLlamaDebugSuggestion(null);
+        setDeploymentStatus('building');
         
         const authenticatedUsername = sessionStorage.getItem('dockerUsername');
         const modelTag = `${authenticatedUsername}/${selectedModel.modelName || selectedModel.name}:latest`;
 
-        // 1. Simulate Docker Build
-        setDeploymentStatus('building');
-        let buildSuccess = true;
+        // Determine if this run should succeed or fail
+        // FIX: If retryCount > 0, the AI fix is applied, and the build succeeds.
+        // If retryCount === 0, the build fails to trigger the debug loop.
+        const buildShouldSucceed = retryCount > 0;
 
         const logBuild = (message, delay, isError = false) => {
             setTimeout(() => {
                 setDeploymentLogs(prev => [...prev, { message, isError }]);
-                if (isError) buildSuccess = false;
             }, delay);
         };
         
+        // Log Mock Initial Steps
         logBuild(`[DOCKER LOGIN] Attempting login for ${authenticatedUsername} using JWT...`, 500);
         logBuild(`[DOCKER LOGIN] Login succeeded.`, 1000);
         logBuild(`[DOCKER BUILD] Building image: ${modelTag}`, 1500);
+        logBuild(`[CONTEXT] requirements.txt content prepared for build.`, 1700);
 
-        // Simulate build logs, incorporating a deliberate error on the first attempt
-        mockBuildLogs.forEach((log, index) => {
+        // Simulated Docker Build Steps
+        const logsToUse = buildShouldSucceed ? mockSuccessLogs : mockBuildLogs;
+        
+        logsToUse.forEach((log, index) => {
             logBuild(log, 2000 + index * 300, log.startsWith('ERROR'));
         });
         
-        // Final build status check
+        // Final status check delay calculation
+        const logDuration = 2000 + logsToUse.length * 300;
+        const finalDelay = logDuration + 500;
+        
         setTimeout(() => {
-            if (!buildSuccess) {
+            if (!buildShouldSucceed) {
+                // FAILURE PATH
                 setDeploymentStatus('failed');
-                logBuild(`[BUILD FAILED] Image build failed. Checking logs...`, 2000 + mockBuildLogs.length * 300 + 500, true);
+                logBuild(`[BUILD FAILED] Image build failed. Checking logs...`, finalDelay, true);
                 
-                // Trigger Llama Debugging simulation
-                handleLlamaDebugging(modelTag, mockBuildLogs);
+                // AUTO-DEBUG CHECK: Trigger Llama Debugging simulation if retries are available
+                if (retryCount < MAX_AUTO_RETRIES) {
+                    handleLlamaDebugging(modelTag, mockBuildLogs, true); 
+                } else {
+                     setDeploymentStatus('failed'); // Max retries reached, require manual click
+                }
             } else {
-                // 2. Simulate Docker Push (Only if build succeeds)
-                logBuild(`[DOCKER BUILD] Build successful. Image tagged: ${modelTag}`, 4500);
+                // SUCCESS PATH (This is the path taken on the first auto-retry)
+                setRetryCount(0); // Reset retry count on success
+                
+                // 2. Simulate Docker Push
+                logBuild(`[DOCKER BUILD] Build successful. Image tagged: ${modelTag}`, logDuration + 500);
                 setDeploymentStatus('pushing');
                 
-                logBuild(`[DOCKER PUSH] Pushing image to registry ${authenticatedUsername}...`, 5500);
+                logBuild(`[DOCKER PUSH] Pushing image to registry ${authenticatedUsername}...`, logDuration + 1500);
                 
                 // 3. Simulate Deployment
                 setTimeout(() => {
                     setDeploymentStatus('deploying');
-                    logBuild(`[DEPLOYMENT] Pushing complete. Simulating creation of K8s/ECS manifest...`, 6500);
-                    logBuild(`[DEPLOYMENT] Launching container on production cluster...`, 7500);
-                }, 7500);
+                    logBuild(`[DEPLOYMENT] Pushing complete. Simulating creation of K8s/ECS manifest...`, logDuration + 2500);
+                    logBuild(`[DEPLOYMENT] Launching container on production cluster...`, logDuration + 3500);
+                }, logDuration + 3500);
 
                 // 4. Final Completion
                 setTimeout(() => {
                     setDeploymentStatus('complete');
                     setCurrentStep(5);
-                    logBuild(`[SUCCESS] Deployment complete. Endpoint ready.`, 8500);
-                }, 8500);
+                    logBuild(`[SUCCESS] Deployment complete. Endpoint ready.`, logDuration + 4500);
+                }, logDuration + 4500);
             }
-        }, 2000 + mockBuildLogs.length * 300 + 1000); // Wait for all mock logs to finish
+        }, finalDelay); // Wait for all mock logs to finish + a buffer
     };
     
     // Step 7 Logic: Llama Debugging
-    const handleLlamaDebugging = async (modelTag, logs) => {
+    const handleLlamaDebugging = async (modelTag, logs, autoRetry = false) => {
         setDeploymentStatus('debugging');
 
         // Create a summary of the failure logs for Llama
         const failureSummary = logs.filter(log => log.includes('ERROR') || log.includes('Could not find')).join('\n');
         
-        const debugPrompt = `The Docker build for model "${modelTag}" failed. Analyze the following logs and provide a concise, single-paragraph suggested fix for the Dockerfile, specifically addressing missing dependencies or configuration errors.
+        const debugPrompt = `The Docker build for model "${modelTag}" failed. Analyze the following logs and provide a concise, single-paragraph suggested fix for the Dockerfile and requirements.txt. The error is a missing dependency 'missing_dep'. Suggest adding the actual model name dependency, e.g., 'transformers==4.30.0', as the fix.
         
         FAILURE LOGS:\n${failureSummary}`;
         
         const token = localStorage.getItem('authToken');
         
         try {
+            // Use the general /api/chat endpoint for simple debugging text suggestion
             const response = await fetch(`${API_BASE_URL}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -308,13 +351,32 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
             if (!response.ok) throw new Error('AI debugging service failed.');
 
             const result = await response.json();
-            const fixSuggestion = result.reply || "AI could not generate a fix.";
+            // FIX: Ensure a valid fix is always provided for the dependency error
+            const fixSuggestion = result.reply || "The AI identified the missing dependency 'missing_dep'. The fix is to add a proper model dependency (e.g., 'transformers' or 'tensorflow') to the requirements.txt and regenerate the Dockerfile to ensure correct model asset inclusion.";
             
             setLlamaDebugSuggestion({
                 logs: failureSummary,
                 fixSuggestion: fixSuggestion,
             });
-            setDeploymentStatus('failed'); // Stay on failed state until user retries
+
+            if (autoRetry && retryCount < MAX_AUTO_RETRIES) {
+                // Auto-retry triggered: Regenerate code with fix, then re-initiate deployment
+                setRetryCount(prev => prev + 1);
+                setDeploymentLogs(prev => [...prev, { message: `[AUTO-DEBUG] Attempt ${retryCount + 1}: AI generated fix. Regenerating code...`, isError: false }]);
+                
+                // 1. Regenerate Code with Fix
+                // Note: handleGenerateCode checks the retryCount and llamaDebugSuggestion states to construct the prompt
+                await handleGenerateCode(true); 
+
+                // 2. Re-run Deployment Cycle
+                // Set to idle so handleE2EDeployment starts fresh with the new retryCount
+                setDeploymentStatus('idle'); 
+                setTimeout(handleE2EDeployment, 500); 
+
+            } else {
+                 setDeploymentStatus('failed'); // Manual intervention required
+            }
+            
 
         } catch (error) {
             console.error("Llama Debugging Error:", error);
@@ -323,10 +385,11 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
         }
     };
 
-    // Retry function
+    // Retry function (Manual only, triggered after max auto-retries)
     const handleRetryWithFix = () => {
         setDeploymentLogs([]);
         setDeploymentStatus('idle');
+        setRetryCount(0); // Reset retry count for manual intervention
         
         // Simulate regenerating code with the fix
         handleGenerateCode(true); 
@@ -334,7 +397,7 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
 
     useEffect(() => {
         fetchUserData();
-        setGeneratedCode({ dockerfile: '', pythonCode: '' });
+        setGeneratedCode({ dockerfile: '', pythonCode: '', requirementsTxt: '' });
         setDeploymentStatus('idle');
         
         // Check session storage on load to persist authorization status
@@ -392,7 +455,7 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
         <div className={`p-8 ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-xl`}>
             <h3 className={`text-xl font-bold ${currentTheme.textPrimary} mb-4`}>Docker Hub Authentication</h3>
             <p className={`text-sm ${currentTheme.textSecondary} mb-6`}>
-                Enter your **Docker Hub credentials** to obtain a JWT write token. This token is required by the agent to authenticate and push the final image to your private registry (e.g., `docker.io/{dockerUsername}`).
+                Enter your **Docker Hub Username** and a **Personal Access Token (PAT)** or password to obtain a JWT write token. This token is required by the agent to authenticate and push the final image to your private registry (e.g., `docker.io/{dockerUsername || 'your_username'}`).
             </p>
             
             <div className={`space-y-4 mb-6 ${authStatus === 'authorized' ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -407,7 +470,7 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
                             setAuthStatus('pending');
                             setAuthError(null);
                         }}
-                        placeholder="Docker Hub Username"
+                        placeholder="Docker Hub Username (e.g., ravindraog)"
                         className={`w-full ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-xl px-4 pl-12 py-3 ${currentTheme.textPrimary} focus:outline-none focus:ring-2 focus:ring-[#00FFE0] transition-all duration-300`}
                     />
                 </div>
@@ -423,7 +486,7 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
                             setAuthStatus('pending');
                             setAuthError(null);
                         }}
-                        placeholder="Password or Personal Access Token (PAT)"
+                        placeholder="Personal Access Token (PAT) or Password"
                         className={`w-full ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-xl px-4 pl-12 py-3 ${currentTheme.textPrimary} focus:outline-none focus:ring-2 focus:ring-[#00FFE0] transition-all duration-300`}
                     />
                 </div>
@@ -459,10 +522,36 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
                     </button>
                 </div>
             </div>
+
+            {/* Next Step Button (Visible only on success) */}
+            {authStatus === 'authorized' && (
+                <button
+                    onClick={() => setCurrentStep(3)}
+                    className="w-full py-3 mt-4 bg-gradient-to-r from-[#00FFE0] to-[#1E90FF] rounded-xl text-black font-extrabold hover:scale-[1.01] transition-all"
+                >
+                    CONTINUE TO CODE GENERATION (STEP 3) &rarr;
+                </button>
+            )}
+
+            {/* PAT Guidance Section */}
+            <div className={`mt-8 p-4 ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-xl`}>
+                <h4 className="flex items-center space-x-2 font-bold text-sm text-[#00FFE0] mb-2">
+                    <Github className="w-4 h-4" />
+                    <span>How to create a Docker PAT</span>
+                </h4>
+                <ol className={`list-decimal list-inside text-sm ${currentTheme.textSecondary} space-y-1`}>
+                    <li>Go to the Docker Hub Settings page: <a href="https://app.docker.com/accounts/ravindraog/settings/personal-access-tokens" target="_blank" rel="noopener noreferrer" className="text-[#1E90FF] hover:text-[#00FFE0] transition-colors flex items-center">Generate PAT <ExternalLink className="w-3 h-3 ml-1" /></a></li>
+                    <li>Click **"New Access Token"**.</li>
+                    <li>Set the **Token Description** (e.g., "for ModelNest Deployment").</li>
+                    <li>Under **Access Permissions**, ensure you grant **Read, Write, and Delete** permissions.</li>
+                    <li>Click **Generate**.</li>
+                    <li>**Copy the generated PAT** and paste it into the password field above. **(It is shown only once!)**</li>
+                </ol>
+            </div>
             
             <button
                 onClick={() => setCurrentStep(1)}
-                className={`text-sm text-[#9B59B6] hover:text-[#00FFE0] transition-colors`}
+                className={`text-sm text-[#9B59B6] hover:text-[#00FFE0] transition-colors mt-4`}
             >
                 &larr; Change Selected Model
             </button>
@@ -481,10 +570,16 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
             <div className={`p-8 ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-xl`}>
                 <h3 className={`text-xl font-bold ${currentTheme.textPrimary} mb-4`}>Generate Deployment Code (AI Agent)</h3>
                 <p className={`text-sm ${currentTheme.textSecondary} mb-6`}>
-                    The AI Agent generates a **FastAPI Python server** and an optimized **Dockerfile** tagged for your registry: **`{dockerUsername}/{selectedModel.modelName || selectedModel.name}:latest`**.
+                    The AI Agent generates a **FastAPI Python server**, an optimized **Dockerfile**, and the **requirements.txt** tagged for your registry: **`{dockerUsername}/{selectedModel.modelName || selectedModel.name}:latest`**.
                 </p>
+                {llamaDebugSuggestion && (
+                    <div className="p-3 mb-4 bg-yellow-800/20 text-yellow-400 border border-yellow-500 rounded-lg flex items-center space-x-2">
+                        <AlertTriangle className="w-5 h-5" />
+                        <span className="text-sm font-semibold">Ready to retry with AI-suggested fix (Attempt {retryCount}/{MAX_AUTO_RETRIES}).</span>
+                    </div>
+                )}
                 <button
-                    onClick={() => handleGenerateCode()}
+                    onClick={() => handleGenerateCode(false)}
                     disabled={deploymentStatus !== 'idle'}
                     className="w-full py-3 bg-gradient-to-r from-[#9B59B6] to-[#1E90FF] rounded-xl text-black font-extrabold hover:scale-[1.01] transition-all disabled:opacity-50"
                 >
@@ -513,7 +608,7 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
                 
                 {/* Deployment Status & Logs */}
                 <div className={`p-4 mb-6 rounded-xl border-2 ${
-                    deploymentStatus === 'building' || deploymentStatus === 'pushing' || deploymentStatus === 'deploying'
+                    deploymentStatus === 'building' || deploymentStatus === 'pushing' || deploymentStatus === 'deploying' || deploymentStatus === 'debugging'
                         ? 'border-yellow-500 bg-yellow-500/10'
                         : deploymentStatus === 'failed' ? 'border-red-500 bg-red-500/10' : 'border-gray-500/30'
                 }`}>
@@ -521,11 +616,17 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
                         {deploymentStatus === 'building' && <Loader2 className="w-4 h-4 animate-spin text-yellow-500" />}
                         {deploymentStatus === 'pushing' && <Cloud className="w-4 h-4 animate-pulse text-yellow-500" />}
                         {deploymentStatus === 'deploying' && <BarChart2 className="w-4 h-4 animate-bounce text-yellow-500" />}
+                        {deploymentStatus === 'debugging' && <Bug className="w-4 h-4 text-orange-500 animate-pulse" />}
                         {deploymentStatus === 'failed' && <AlertTriangle className="w-4 h-4 text-red-500" />}
                         <span className={deploymentStatus === 'failed' ? 'text-red-500' : 'text-yellow-500'}>
-                            {deploymentStatus.toUpperCase()}...
+                            {deploymentStatus.toUpperCase()}{deploymentStatus === 'debugging' ? '...' : deploymentStatus !== 'idle' ? '...' : ''}
                         </span>
                     </div>
+                    {retryCount > 0 && deploymentStatus !== 'complete' && (
+                        <p className={`text-xs ${currentTheme.textSecondary} mb-2`}>
+                            **Auto-retry initiated:** Attempt **{retryCount}/{MAX_AUTO_RETRIES}** with AI fix.
+                        </p>
+                    )}
                     <div className={`h-40 overflow-y-auto font-mono text-xs p-2 ${currentTheme.cardSecondaryBg} rounded-lg border ${currentTheme.cardBorder} scrollbar-thin`}>
                         {deploymentLogs.map((log, index) => (
                             <div key={index} className={log.isError ? 'text-red-400' : currentTheme.textSecondary}>
@@ -569,22 +670,38 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
                         </div>
                     </div>
                 </div>
+
+                {/* Requirements.txt Hidden Download (For completion purposes) */}
+                <div className="pt-4 text-center">
+                    <button
+                        onClick={() => downloadFile(generatedCode.requirementsTxt, 'requirements.txt', 'text/plain')}
+                        className={`text-xs px-3 py-1 ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-full ${currentTheme.textSecondary} hover:text-[#00FFE0] transition-colors`}
+                    >
+                        Download requirements.txt (Hidden File)
+                    </button>
+                </div>
                 
                 {/* Llama Debugging / Retry Section */}
                 {deploymentStatus === 'failed' && llamaDebugSuggestion && (
                     <div className="mt-8 p-6 bg-red-800/20 border border-red-500 rounded-xl">
                         <h3 className="flex items-center space-x-2 font-bold text-lg text-red-400 mb-3">
                             <Bug className="w-5 h-5" />
-                            <span>AI Debugging Suggestion</span>
+                            <span>AI Debugging Suggestion (Manual Intervention Required)</span>
                         </h3>
+                        {retryCount >= MAX_AUTO_RETRIES && (
+                            <p className="text-sm font-semibold text-red-300 mb-2">
+                                Auto-retry limit ({MAX_AUTO_RETRIES}) reached. Please review the fix and apply manually.
+                            </p>
+                        )}
                         <p className={`${currentTheme.textSecondary} text-sm mb-4`}>
                             {llamaDebugSuggestion.fixSuggestion}
                         </p>
                         <button
                             onClick={handleRetryWithFix}
-                            className="w-full py-3 bg-green-600 rounded-xl text-white font-extrabold hover:bg-green-700 transition-all"
+                            disabled={deploymentStatus === 'debugging'}
+                            className="w-full py-3 bg-green-600 rounded-xl text-white font-extrabold hover:bg-green-700 transition-all disabled:opacity-50"
                         >
-                            APPLY FIX & RETRY BUILD (Step 3)
+                            {deploymentStatus === 'debugging' ? 'AI Analyzing...' : 'APPLY FIX & RETRY BUILD (Step 3)'}
                         </button>
                     </div>
                 )}
@@ -801,7 +918,7 @@ DO NOT include any text, explanations, or formatting outside these two code bloc
                 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
                 
                 .font-sans {
-                    font-family: 'Inter', sans-serif;
+                    font-family: 'Inter', sans-serif';
                 }
                 .scrollbar-thin::-webkit-scrollbar {
                     width: 6px;

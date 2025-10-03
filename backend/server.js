@@ -450,11 +450,11 @@ app.get('/api/models/trained', protect, async (req, res) => {
     }
 });
 
-// ======== AI CHAT ROUTE (Omitted for brevity, assumed functional) ========
+// ======== AI CHAT ROUTE (General) ========
 
 /**
  * @route   POST /api/chat
- * @desc    Proxy chat messages to Hugging Face Inference API
+ * @desc    Proxy general chat messages to Hugging Face Inference API
  * @access  Private
  */
 app.post("/api/chat", protect, async (req, res) => {
@@ -485,6 +485,75 @@ app.post("/api/chat", protect, async (req, res) => {
     console.error("Hugging Face API Error:", error.response ? error.response.data : error.message);
     res.status(500).json({ message: "AI service is currently unavailable." });
   }
+});
+
+
+// ======== NEW DEDICATED DEPLOYMENT CODE GENERATION ROUTE ========
+
+/**
+ * @route   POST /api/deployment/generate-code
+ * @desc    Uses Llama to generate Python (FastAPI), requirements.txt, and Dockerfile for deployment.
+ * @access  Private
+ */
+app.post("/api/deployment/generate-code", protect, async (req, res) => {
+    const { modelIdentifier, platform, authenticatedUsername, modelSourceDetail, isRetry, llamaDebugSuggestion } = req.body;
+    const hfToken = process.env.HUGGING_FACE_TOKEN;
+    
+    if (!modelIdentifier || !authenticatedUsername) {
+        return res.status(400).json({ message: "Model identifier and username are required." });
+    }
+
+    if (!hfToken) {
+        console.error("Hugging Face token is not configured on the server for code generation.");
+        return res.status(500).json({ message: "AI code generation service is not configured." });
+    }
+
+    let userPrompt = `Generate the following three files for the model named "${modelIdentifier}" from the source ${platform}:
+1. The **Python (FastAPI) application file (app.py)**. It must include all necessary imports like 'fastapi', 'transformers', 'torch', 'pydantic', 'PIL', 'io', and 'requests' for handling image classification/inference tasks, and must use the model identifier: "${modelIdentifier}".
+2. The contents of the **requirements.txt** file, which MUST list ALL dependencies from the generated app.py (e.g., fastapi, uvicorn, transformers, torch, Pillow, requests). CRITICAL: This list MUST include **uvicorn** and **Pillow** (not just 'pillow') to run the web server. IMPORTANT: **DO NOT include any version numbers** (e.g., just 'fastapi', not 'fastapi==0.1.2').
+3. The **Dockerfile** for building the image. It must be production-ready and expose port 8000, and tag the image for Docker Hub username "${authenticatedUsername}" (e.g., # Image tag: ${authenticatedUsername}/${modelIdentifier}:latest).
+${modelSourceDetail || ''}
+
+CRITICAL: Output the files in this strict order:
+First: \`\`\`python\n...\n\`\`\` block (app.py)
+Second: \`\`\`text\n...\n\`\`\` block (requirements.txt, NO versions)
+Third: \`\`\`dockerfile\n...\n\`\`\` block (Dockerfile)
+
+DO NOT include any conversational text, explanations, or formatting outside these three code blocks.`;
+
+    if (isRetry && llamaDebugSuggestion && llamaDebugSuggestion.fixSuggestion) {
+        // Add Llama's suggested fix to the prompt for code regeneration
+        userPrompt += `\n\n[RETRY REQUEST]: A previous build failed. Please ensure the new generated code includes this fix, particularly in requirements.txt: ${llamaDebugSuggestion.fixSuggestion}`;
+    }
+
+    // System instruction specifically tailored for code generation output format
+    const systemPrompt = `You are an expert DevOps and MLOps engineer specializing in Llama model deployment. Your sole task is to generate EXACTLY three code blocks in this strict order: 1. app.py (inside \`\`\`python\n...\n\`\`\` block), 2. requirements.txt (inside \`\`\`text\n...\n\`\`\` block, NO version numbers, MUST include uvicorn and Pillow), and 3. Dockerfile (inside \`\`\`dockerfile\n...\n\`\`\` block). Do not add any conversational text or markdown headings.`;
+
+    const apiUrl = `https://router.huggingface.co/v1/chat/completions`;
+    const payload = {
+        model: "meta-llama/Llama-3.1-8B-Instruct:fireworks-ai", // High-capability Llama model for code tasks
+        messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": userPrompt }],
+        max_tokens: 2048, // Increased tokens for the large code output
+        temperature: 0.2, // Lower temperature for more reliable code generation
+    };
+
+    try {
+        const hfResponse = await axios.post(apiUrl, payload, {
+            headers: { 'Authorization': `Bearer ${hfToken}` }
+        });
+        const aiText = hfResponse.data.choices?.[0]?.message?.content;
+        
+        if (!aiText) {
+             return res.status(500).json({ message: "AI response was empty." });
+        }
+        
+        // Return the raw text, frontend will handle extraction
+        res.json({ generatedCode: aiText });
+        
+    } catch (error) {
+        console.error("Hugging Face API Code Generation Error:", error.response ? error.response.data : error.message);
+        res.status(500).json({ message: "AI code generation service failed." });
+    }
 });
 
 
