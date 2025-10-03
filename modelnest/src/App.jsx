@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
 import Landing from "./pages/landingpage";
 import MainPage from "./pages/homepage";  
 import Authentication from "./pages/auth";
-
+import Marketplace from './pages/marketplace';
 //Shared Theme and Color Configuration
 const colorScheme = {
     light: {
@@ -70,6 +70,16 @@ function App() {
                         />
                     } 
                 /> 
+                <Route 
+                    path="/marketplace" 
+                    element={
+                        <Marketplace 
+                            theme={theme} 
+                            currentTheme={currentTheme} 
+                            toggleTheme={toggleTheme} 
+                        />
+                    } 
+                /> 
                 
                 <Route 
                     path="/auth" 
@@ -83,6 +93,7 @@ function App() {
                     } 
                 />
             </Routes>
+            
         </BrowserRouter>
     );
 }

@@ -422,14 +422,24 @@ export default function Homepage() {
                 {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </button>
               
-              {['Dashboard', 'My Models', 'Deployments'].map((item) => (
-                <button
-                  key={item}
-                  className={`hidden md:block ${currentTheme.textSecondary} hover:${isDark ? 'text-[#00FFE0] hover:scale-105' : 'text-[#1E90FF] hover:scale-105'} transition-all font-semibold`}
-                >
-                  {item}
-                </button>
-              ))}
+              {['MarketPlace', 'My Models', 'Deployments'].map((item) => (
+  <button
+    key={item}
+    onClick={() => {
+      if (item === 'MarketPlace') {
+        window.location.href = '/marketplace'
+      } else {
+        window.location.href = '#'
+      }
+    }}
+    className={`hidden md:block ${currentTheme.textSecondary} hover:${
+      isDark ? 'text-[#00FFE0] hover:scale-105' : 'text-[#1E90FF] hover:scale-105'
+    } transition-all font-semibold`}
+  >
+    {item}
+  </button>
+))}
+
 
               {/* Profile Menu */}
               <div className="relative z-50">
