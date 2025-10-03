@@ -4,398 +4,326 @@ import cors from "cors";
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import axios from "axios"; // 👈 NEW: Import axios for external API calls
+import axios from "axios";
 
-// Load environment variables
+// Load environment variables from .env file
 dotenv.config();
 
-// --- 1. Database Connection ---
+// --- 1. DATABASE CONNECTION ---
 const connectDB = async () => {
   try {
-    // Note: process.env.MONGO_URI must be defined in your .env file
-    // Example: MONGO_URI=mongodb+srv://ravi:ravi7677@cluster0.rfkxncf.mongodb.net/modelnest
     const conn = await mongoose.connect(process.env.MONGO_URI);
     console.log(`MongoDB Connected: ${conn.connection.host}`);
   } catch (err) {
-    console.error(err.message);
-    process.exit(1);
+    console.error(`MongoDB Connection Error: ${err.message}`);
+    process.exit(1); // Exit process with failure
   }
 };
 connectDB();
 
-// --- 2. User Schema and Model ---
+// --- 2. MONGOOSE SCHEMAS & MODELS ---
+
+/**
+ * @desc User Schema for MongoDB
+ */
 const userSchema = new mongoose.Schema(
   {
-    name: { 
-      type: String, 
-      required: true, 
-      trim: true 
-    },
-    email: { 
-      type: String, 
-      required: true, 
-      unique: true, 
-      lowercase: true 
-    },
-    password: { 
-      type: String, 
-      required: true, 
-      minlength: 8 
-    },
-    company: {
-      type: String,
-      trim: true,
-      default: null
-    },
-    role: {
-      type: String,
-      trim: true,
-      default: null
-    },
-    experience: {
-      type: String,
-      trim: true,
-      enum: ['Beginner', 'Intermediate', 'Expert', null],
-      default: null
-    },
-    interests: {
-      type: [String],
-      default: []
-    },
-    useCases: {
-      type: [String],
-      default: []
-    }
+    name: { type: String, required: true, trim: true },
+    email: { type: String, required: true, unique: true, lowercase: true },
+    password: { type: String, required: true, minlength: 8 },
+    company: { type: String, trim: true, default: null },
+    role: { type: String, trim: true, default: null },
+    experience: { type: String, trim: true, enum: ['Beginner', 'Intermediate', 'Expert', null], default: null },
+    interests: { type: [String], default: [] },
+    useCases: { type: [String], default: [] }
   },
   { timestamps: true }
 );
 
 const User = mongoose.model("User", userSchema);
 
-// --- 3. Authentication Middleware (protect) ---
+// --- 3. MIDDLEWARE ---
+
+/**
+ * @desc Protect routes by verifying JWT token.
+ * Attaches user ID to the request object if the token is valid.
+ * @param {object} req - Express request object
+ * @param {object} res - Express response object
+ * @param {function} next - Express next middleware function
+ */
 const protect = (req, res, next) => {
-  // Extract token from 'Bearer TOKEN' format
-  const token = req.headers.authorization?.split(" ")[1]; 
-  if (!token) return res.status(401).json({ message: "No token, unauthorized" });
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({ message: "No token, authorization denied" });
+  }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    // Attach user ID from token payload to request object
-    req.user = decoded.id; 
+    req.user = decoded.id;
     next();
-  } catch {
-    res.status(401).json({ message: "Token invalid" });
+  } catch (error) {
+    res.status(401).json({ message: "Token is not valid" });
   }
 };
 
-// --- 4. Express App Setup ---
+// --- 4. EXPRESS APP SETUP ---
 const app = express();
-app.use(express.json()); // Middleware to parse JSON request bodies
-app.use(cors('*')); // Allow all origins for CORS
+app.use(express.json()); // Body parser for JSON
+app.use(cors('*'));      // Enable Cross-Origin Resource Sharing
 
-// --- Helper function to generate mock performance data consistently ---
-// (Needed because external APIs often don't provide these metrics)
+// --- 5. HELPER FUNCTIONS ---
+
+/**
+ * @desc Generates consistent mock performance data for models based on their name.
+ * @param {string} name - The name of the model.
+ * @returns {object} An object with mock metrics.
+ */
 const generateMockMetrics = (name) => {
-    // Simple hash function for consistent mock data
     const hash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     return {
         id: hash,
-        performance: parseFloat((85 + hash % 15 + (hash % 10) / 10).toFixed(1)), // 85% - 100%
-        speed: hash % 100 + 5, // 5ms - 104ms
-        rating: parseFloat((4.0 + (hash % 10) / 20).toFixed(1)), // 4.0 - 4.5
+        performance: parseFloat((85 + hash % 15 + (hash % 10) / 10).toFixed(1)),
+        speed: hash % 100 + 5,
+        rating: parseFloat((4.0 + (hash % 10) / 20).toFixed(1)),
         reviews: hash % 5000 + 100,
-        downloads: parseFloat((hash % 100 / 10 + 1).toFixed(1)), // 1M - 11M
-        tags: [], // Will be overwritten if tags exist
+        downloads: parseFloat(((hash % 100 / 10) + 1).toFixed(1)),
     };
 };
 
+// --- 6. ROUTE DEFINITIONS ---
 
-// --- 5. Route Definitions (Inline Controllers) ---
+// ======== AUTHENTICATION ROUTES ========
 
-// POST /api/auth/signup - User Registration
+/**
+ * @route   POST /api/auth/signup
+ * @desc    Register a new user
+ * @access  Public
+ */
 app.post("/api/auth/signup", async (req, res) => {
   try {
-    // Destructure all fields, including optional ones
     const { name, email, password, company, role, experience, interests, useCases } = req.body;
-    
-    // Check for required fields
     if (!name || !email || !password) {
       return res.status(400).json({ message: "Name, email, and password are required." });
     }
-
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: "User already exists" });
+    if (await User.findOne({ email })) {
+      return res.status(400).json({ message: "User with this email already exists" });
     }
-
     const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create user with all collected data fields
-    const newUser = await User.create({
-      name,
-      email,
-      password: hashedPassword,
-      company,
-      role,
-      experience,
-      interests,
-      useCases
-    });
-
-    res.status(201).json({ 
-      message: "User registered successfully", 
-      userId: newUser._id 
-    });
+    const newUser = await User.create({ name, email, password: hashedPassword, company, role, experience, interests, useCases });
+    res.status(201).json({ message: "User registered successfully", userId: newUser._id });
   } catch (err) {
-    // IMPORTANT: Log Mongoose errors (like E11000 duplicate key or validation errors)
-    console.error("Registration Error:", err); 
-    res.status(500).json({ message: err.message });
+    console.error("Signup Error:", err);
+    res.status(500).json({ message: "Server error during registration." });
   }
 });
 
-// POST /api/auth/signin - User Login
+/**
+ * @route   POST /api/auth/signin
+ * @desc    Authenticate user and get token
+ * @access  Public
+ */
 app.post("/api/auth/signin", async (req, res) => {
   try {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
-
-    if (!user) return res.status(400).json({ message: "Invalid credentials" });
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ message: "Invalid credentials" });
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ message: "Invalid credentials" });
     }
-
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: "1d"
-    });
-
-    res.status(200).json({
-      message: "Login successful",
-      token,
-      user: { id: user._id, name: user.name, email: user.email }
-    });
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "1d" });
+    res.status(200).json({ token, user: { id: user._id, name: user.name, email: user.email } });
   } catch (err) {
-    console.error("Login Error:", err);
-    res.status(500).json({ message: err.message });
+    console.error("Signin Error:", err);
+    res.status(500).json({ message: "Server error during sign-in." });
   }
 });
 
-// GET /api/profile - Fetch user profile (Protected)
+// ======== USER PROFILE ROUTES ========
+
+/**
+ * @route   GET /api/profile
+ * @desc    Get user profile data
+ * @access  Private
+ */
 app.get('/api/profile', protect, async (req, res) => {
   try {
-    // req.user contains the ID from the protect middleware
     const user = await User.findById(req.user).select('-password');
-    if (user) {
-      res.json(user);
-    } else {
-      res.status(404).json({ message: 'User not found' });
-    }
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json(user);
   } catch (error) {
     console.error("Get Profile Error:", error);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// PUT /api/profile - Update user profile (Protected)
+/**
+ * @route   PUT /api/profile
+ * @desc    Update user profile data
+ * @access  Private
+ */
 app.put('/api/profile', protect, async (req, res) => {
   try {
-    // req.user contains the ID from the protect middleware
-    const user = await User.findById(req.user);
+    const updateData = {
+        name: req.body.name,
+        email: req.body.email,
+        company: req.body.company,
+        role: req.body.role,
+        experience: req.body.experience,
+        interests: req.body.interests,
+        useCases: req.body.useCases,
+    };
+    // Remove undefined fields so they don't overwrite existing data
+    Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);
 
-    if (user) {
-      // Update fields from the request body, falling back to existing data if not provided
-      user.name = req.body.name || user.name;
-      user.email = req.body.email || user.email;
-      user.company = req.body.company || user.company;
-      user.role = req.body.role || user.role;
-      user.experience = req.body.experience || user.experience;
-      user.interests = req.body.interests || user.interests;
-      user.useCases = req.body.useCases || user.useCases;
+    const updatedUser = await User.findByIdAndUpdate(req.user, updateData, { new: true }).select('-password');
+    if (!updatedUser) return res.status(404).json({ message: 'User not found' });
 
-      const updatedUser = await user.save();
-
-      // Return the updated user object (excluding password)
-      res.json({
-        _id: updatedUser._id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        company: updatedUser.company,
-        role: updatedUser.role,
-        experience: updatedUser.experience,
-        interests: updatedUser.interests,
-        useCases: updatedUser.useCases,
-      });
-    } else {
-      res.status(404).json({ message: 'User not found' });
-    }
+    res.json(updatedUser);
   } catch (error) {
-    // IMPORTANT: Log the error. If a user tries to change their email to one that already exists, 
-    // Mongoose throws an E11000 error here, which will be logged.
-    console.error("Update Profile Error:", error); 
-    res.status(500).json({ message: error.message });
+    console.error("Update Profile Error:", error);
+    res.status(500).json({ message: "Server error while updating profile." });
+  }
+});
+
+// ======== AI CHAT ROUTE ========
+
+/**
+ * @route   POST /api/chat
+ * @desc    Proxy chat messages to Hugging Face Inference API
+ * @access  Private
+ */
+app.post("/api/chat", protect, async (req, res) => {
+  const { message } = req.body;
+  const hfToken = process.env.HUGGING_FACE_TOKEN;
+
+  if (!message) return res.status(400).json({ message: "Message is required." });
+  if (!hfToken) {
+    console.error("Hugging Face token is not configured on the server.");
+    return res.status(500).json({ message: "AI service is not configured." });
+  }
+
+  const systemPrompt = `You are a world-class AI Training Advisor named ModelNest. Your goal is to help users with their AI projects by recommending the perfect models or guiding them on training custom ones. Keep your responses concise, helpful, and friendly. You are powered by Meta Llama.`;
+  const apiUrl = `https://router.huggingface.co/v1/chat/completions`;
+  const payload = {
+      model: "meta-llama/Llama-3.1-8B-Instruct:fireworks-ai",
+      messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": message }],
+      max_tokens: 1024,
+  };
+
+  try {
+    const hfResponse = await axios.post(apiUrl, payload, {
+        headers: { 'Authorization': `Bearer ${hfToken}` }
+    });
+    const aiText = hfResponse.data.choices?.[0]?.message?.content;
+    res.json({ reply: aiText || "Sorry, I couldn't get a proper response." });
+  } catch (error) {
+    console.error("Hugging Face API Error:", error.response ? error.response.data : error.message);
+    res.status(500).json({ message: "AI service is currently unavailable." });
   }
 });
 
 
-// --- NEW: GET /api/models/marketplace - Aggregate Model Data ---
+// ======== MODEL MARKETPLACE ROUTE ========
+
+// --- Marketplace Helper Functions ---
+
+const fetchHuggingFaceModels = async () => {
+  try {
+    const response = await axios.get("https://huggingface.co/api/models?limit=50");
+    return response.data.map(model => ({
+      ...generateMockMetrics(model.modelId),
+      platform: "Hugging Face",
+      name: model.modelId,
+      description: model.cardData?.summary || `A ${model.pipeline_tag || 'general'} model.`,
+      url: `https://huggingface.co/${model.modelId}`,
+      tags: model.tags || [],
+      category: model.pipeline_tag ? model.pipeline_tag.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ') : 'Multimodal',
+    }));
+  } catch (err) {
+    console.warn("Hugging Face fetch failed:", err.message);
+    return [];
+  }
+};
+
+const fetchReplicateModels = async () => {
+  if (!process.env.REPLICATE_API_KEY) return [];
+  try {
+    const response = await axios.get("https://api.replicate.com/v1/models", {
+      headers: { Authorization: `Token ${process.env.REPLICATE_API_KEY}` }
+    });
+    return response.data.results.map(model => ({
+      ...generateMockMetrics(model.name),
+      platform: "Replicate",
+      name: model.name.split('/')[1] || model.name,
+      description: model.description || "A model hosted on the Replicate platform.",
+      url: `https://replicate.com/${model.name}`,
+      tags: model.tags || [],
+      category: 'Multimodal',
+    }));
+  } catch (err) {
+    console.warn("Replicate fetch failed:", err.message);
+    return [];
+  }
+};
+
+const fetchOpenAIModels = async () => {
+    if (!process.env.OPENAI_API_KEY) return [];
+    try {
+        const response = await axios.get("https://api.openai.com/v1/models", {
+            headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+        });
+        return response.data.data.map(model => ({
+            ...generateMockMetrics(model.id),
+            platform: "OpenAI",
+            name: model.id,
+            description: `Official model from OpenAI.`,
+            url: `https://platform.openai.com/docs/models/${model.id}`,
+            tags: ['LLM', 'GPT'],
+            category: 'Generation',
+        }));
+    } catch (err) {
+        console.warn("OpenAI fetch failed:", err.message);
+        return [];
+    }
+};
+
+const getStaticModels = () => [
+    ...[{ name: "MobileNetV3", category: "Vision", tags: ['CNN', 'Vision'] }, { name: "Universal Sentence Encoder", category: "NLP", tags: ['Embeddings', 'NLP'] }].map(m => ({ ...generateMockMetrics(m.name), ...m, platform: "TensorFlow Hub", description: `A popular ${m.category} model.` })),
+    ...[{ name: "ResNet18", category: "Vision", tags: ['CNN', 'Vision'] }, { name: "SSD Detection", category: "Detection", tags: ['Detection', 'Vision'] }].map(m => ({ ...generateMockMetrics(m.name), ...m, platform: "PyTorch Hub", description: `A popular ${m.category} model.` })),
+    ...[{ name: "Llama 3 8B", category: "Generation", tags: ['LLM', 'Groq'] }, { name: "Mixtral 8x7B", category: "Generation", tags: ['LLM', 'MoE'] }].map(m => ({ ...generateMockMetrics(m.name), ...m, platform: "Groq", description: `Ultra-fast inference model.` })),
+    ...[{ name: "Command R+", category: "Generation", tags: ['LLM', 'RAG'] }, { name: "Embed English V3", category: "NLP", tags: ['Embeddings'] }].map(m => ({ ...generateMockMetrics(m.name), ...m, platform: "Cohere", description: `Enterprise-grade model.` })),
+    ...[{ name: "GPT-J 6B", category: "Generation", tags: ['LLM'] }, { name: "BLOOM", category: "Generation", tags: ['LLM'] }].map(m => ({ ...generateMockMetrics(m.name), ...m, platform: "EleutherAI/BigScience", description: `Open-source LLM initiative.` })),
+];
+
+/**
+ * @route   GET /api/models/marketplace
+ * @desc    Aggregate model data from multiple platforms
+ * @access  Public
+ */
 app.get('/api/models/marketplace', async (req, res) => {
   try {
-    const fetchPromises = [];
-    let allModels = [];
+    // Fetch from all sources in parallel
+    const results = await Promise.all([
+      fetchHuggingFaceModels(),
+      fetchReplicateModels(),
+      fetchOpenAIModels(),
+      getStaticModels(),
+    ]);
 
-    // --- 1. Hugging Face (Public Endpoint) ---
-    fetchPromises.push(
-      axios.get("https://huggingface.co/api/models?limit=50")
-        .then(hfResponse => {
-          const models = hfResponse.data.map(model => ({
-            ...generateMockMetrics(model.modelId), // Add mock performance metrics
-            platform: "Hugging Face",
-            name: model.modelId,
-            description: model.cardData?.summary || `A ${model.pipeline_tag || 'general'} model from Hugging Face.`,
-            url: `https://huggingface.co/${model.modelId}`,
-            tags: model.tags || [],
-            category: model.pipeline_tag ? model.pipeline_tag.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ') : 'Multimodal',
-          }));
-          return models;
-        })
-        .catch(err => {
-          console.warn("Hugging Face fetch failed:", err.message);
-          return [];
-        })
-    );
+    // Flatten the array of arrays into a single array
+    const allModels = results.flat();
 
-    // --- 2. Replicate (Requires API Key) ---
-    // Replicate
-if (process.env.REPLICATE_API_KEY) {
-  fetchPromises.push(
-    axios.get("https://api.replicate.com/v1/models", {
-  headers: { Authorization: `Token ${process.env.REPLICATE_API_KEY}` }
-})
-.then(repResponse => {
-  const rawModels = repResponse.data.results; // <- Use the correct key
-  return rawModels.map(model => ({
-    ...generateMockMetrics(model.name),
-    platform: "Replicate",
-    name: model.name.split('/')[1] || model.name,
-    description: model.description || "",
-    url: `https://replicate.com/${model.name}`,
-    tags: model.tags || [],
-    category: 'Multimodal',
-  }));
-})
-
-  );
-}
-
-// OpenAI
-if (process.env.OPENAI_API_KEY) {
-  fetchPromises.push(
-    axios.get("https://api.openai.com/v1/models", {
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
-    })
-    .then(openAIResponse => openAIResponse.data.data.map(model => ({
-      ...generateMockMetrics(model.id),
-      platform: "OpenAI",
-      name: model.id,
-      description: `OpenAI model: ${model.id}`,
-      url: `https://platform.openai.com/models/${model.id}`,
-      tags: ['LLM', 'GPT'],
-      category: 'Generation',
-    })))
-    .catch(err => {
-      console.warn("OpenAI fetch failed:", err.message);
-      return [];
-    })
-  );
-}
-
-    
-    // --- 4. TensorFlow Hub (Reference URLs) ---
-    const tensorFlowModels = [
-      { name: "MobileNetV3", category: "Vision", url: "https://tfhub.dev/google/imagenet/mobilenet_v3_small_100_224/classification/5", tags: ['CNN', 'Vision'] },
-      { name: "Universal Sentence Encoder", category: "NLP", url: "https://tfhub.dev/google/universal-sentence-encoder/4", tags: ['Embeddings', 'NLP'] },
-    ].map(model => ({
-      ...generateMockMetrics(model.name),
-      ...model,
-      platform: "TensorFlow Hub",
-      description: `Reference link to a popular ${model.category} model on TensorFlow Hub.`,
-    }));
-    allModels.push(...tensorFlowModels);
-
-    // --- 5. PyTorch Hub (Reference URLs) ---
-    const pytorchModels = [
-      { name: "ResNet18", category: "Vision", url: "https://pytorch.org/hub/pytorch_vision_resnet/", tags: ['CNN', 'Vision', 'PyTorch'] },
-      { name: "SSD Detection", category: "Detection", url: "https://pytorch.org/hub/nvidia_deeplearningexamples_ssd/", tags: ['Detection', 'Vision'] },
-    ].map(model => ({
-      ...generateMockMetrics(model.name),
-      ...model,
-      platform: "PyTorch Hub",
-      description: `Reference link to a popular ${model.category} model on PyTorch Hub.`,
-    }));
-    allModels.push(...pytorchModels);
-
-    // --- 6. Groq (Reference URLs for supported models) ---
-    const groqModels = [
-      { name: "Llama 3 8B", category: "Generation", url: "https://groq.com/products/llama-3/", tags: ['LLM', 'Fast', 'Groq'] },
-      { name: "Mixtral 8x7B", category: "Generation", url: "https://groq.com/products/mixtral-8x7b/", tags: ['LLM', 'MoE', 'Fast'] },
-    ].map(model => ({
-      ...generateMockMetrics(model.name),
-      ...model,
-      platform: "Groq",
-      description: `Ultra-fast inference model supported by Groq.`,
-    }));
-    allModels.push(...groqModels);
-
-    // --- 7. Cohere (Reference URLs for key models) ---
-    const cohereModels = [
-      { name: "Command R+", category: "Generation", url: "https://cohere.com/models/command-r-plus", tags: ['LLM', 'RAG'] },
-      { name: "Embed English V3", category: "NLP", url: "https://cohere.com/models/embed-english-v3", tags: ['Embeddings', 'NLP'] },
-    ].map(model => ({
-      ...generateMockMetrics(model.name),
-      ...model,
-      platform: "Cohere",
-      description: `Enterprise-grade model from Cohere.`,
-    }));
-    allModels.push(...cohereModels);
-
-    // --- 8. EleutherAI / BigScience (Reference URLs, often hosted on HF) ---
-    const eleutherModels = [
-      { name: "GPT-J 6B", category: "Generation", url: "https://huggingface.co/EleutherAI/gpt-j-6b", tags: ['Open Source', 'LLM'] },
-      { name: "BLOOM", category: "Generation", url: "https://huggingface.co/bigscience/bloom", tags: ['BigScience', 'LLM'] },
-    ].map(model => ({
-      ...generateMockMetrics(model.name),
-      ...model,
-      platform: "EleutherAI/BigScience",
-      description: `Open-source large language model initiative.`,
-    }));
-    allModels.push(...eleutherModels);
-
-    // Wait for all promises (Hugging Face, Replicate, OpenAI) to resolve
-    const fetchedResults = await Promise.all(fetchPromises);
-    fetchedResults.forEach(result => {
-      allModels.push(...result);
-    });
-
-    // Final processing: Ensure unique IDs and combine all
-    const uniqueModels = [];
-    const modelNames = new Set();
-    
-    allModels.forEach(model => {
-      if (!modelNames.has(model.name)) {
-        modelNames.add(model.name);
-        uniqueModels.push(model);
-      }
-    });
+    // De-duplicate models based on name to ensure each model appears only once
+    const uniqueModels = Array.from(new Map(allModels.map(item => [item.name, item])).values());
 
     res.json(uniqueModels);
   } catch (err) {
-    console.error("Marketplace API Aggregator Error:", err.message);
-    res.status(500).json({ message: "Failed to fetch marketplace models" });
+    console.error("Marketplace Aggregator Error:", err.message);
+    res.status(500).json({ message: "Failed to fetch marketplace models." });
   }
 });
 
 
-// --- 6. Start Server ---
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// --- 7. SERVER INITIALIZATION ---
+const PORT = process.env.PORT || 8080; // Changed port to 8080
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+

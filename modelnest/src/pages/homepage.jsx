@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { MessageSquare, Send, Sparkles, TrendingUp, Star, Box, Search, Filter, ArrowRight, Zap, Clock, Users, ChevronRight, Brain, Upload, Sun, Moon, User, Settings, LogOut, Edit2, Save, X, Image as ImageIcon } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_BASE_URL;
@@ -30,6 +30,21 @@ const greetings = [
   "Welcome back", "Hello", "Hey there", "Good to see you",
   "Greetings", "Nice to have you back", "Welcome", "Hi there"
 ];
+
+// Helper component for star rating visualization
+const RatingStars = ({ rating }) => {
+  const fullStars = Math.floor(rating);
+  const stars = [];
+  for (let i = 0; i < 5; i++) {
+    stars.push(
+      <Star
+        key={i}
+        className={`w-4 h-4 transition-colors ${i < fullStars ? 'text-yellow-400 fill-yellow-400' : 'text-gray-600'}`}
+      />
+    );
+  }
+  return <div className="flex space-x-0.5">{stars}</div>;
+};
 
 // Profile Edit Modal Component
 const ProfileEditModal = ({ profile, onSave, onClose, currentTheme }) => {
@@ -168,9 +183,18 @@ export default function Homepage() {
   const [chatMessage, setChatMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  
+  // State for chat messages and loading
   const [messages, setMessages] = useState([
     { type: 'assistant', text: 'Welcome to ModelNest! Tell me about your AI project, and I\'ll recommend the perfect model or help you train a custom one.' }
   ]);
+  const [isLoading, setIsLoading] = useState(false);
+  
+  // Refs for chat container and file input
+  const chatContainerRef = useRef(null);
+  const fileInputRef = useRef(null);
+  
+  const [popularModels, setPopularModels] = useState([]); // State for fetched popular models
 
   const currentTheme = colorScheme[theme];
   const isDark = theme === 'dark';
@@ -179,6 +203,15 @@ export default function Homepage() {
   const fetchProfile = useCallback(async () => {
     try {
       setLoading(true);
+      // Check for profile data in session storage first
+      const storedProfile = sessionStorage.getItem('userProfile');
+      if (storedProfile) {
+        setProfile(JSON.parse(storedProfile));
+        setLoading(false);
+        setGreeting(greetings[Math.floor(Math.random() * greetings.length)]);
+        return;
+      }
+      
       // Retrieve the authentication token
       const token = localStorage.getItem('authToken'); 
       
@@ -195,6 +228,8 @@ export default function Homepage() {
       } else {
         const data = await response.json();
         setProfile(data);
+        // Store profile data in session storage
+        sessionStorage.setItem('userProfile', JSON.stringify(data));
       }
       
       setGreeting(greetings[Math.floor(Math.random() * greetings.length)]);
@@ -206,11 +241,118 @@ export default function Homepage() {
       setLoading(false);
     }
   }, []);
+  
+  // --- New: Fetch Popular Models from Marketplace API ---
+  const fetchPopularModels = useCallback(async () => {
+    try {
+      // NOTE: Using the static API_BASE_URL defined above (or your backend URL)
+      const response = await fetch(`${API_BASE_URL}/api/models/marketplace`);
 
-  // Fetch profile data on mount
+      if (!response.ok) {
+        console.error(`Failed to fetch marketplace models: ${response.status}`);
+        return;
+      }
+      
+      let allModels = await response.json();
+
+      // Ensure necessary fields for sorting exist (using mock values if API fails to provide them)
+      allModels = allModels.map(model => ({
+        ...model,
+        downloads: parseFloat(model.downloads) || 0, // Ensure downloads is a number
+        rating: parseFloat(model.rating) || 0,       // Ensure rating is a number
+        performance: model.performance || 'N/A',
+        speed: model.speed || 'N/A',
+      }));
+
+      // Sort models: Primary key = downloads (desc), Secondary key = rating (desc)
+      const sortedModels = allModels.sort((a, b) => {
+        if (b.downloads !== a.downloads) {
+          return b.downloads - a.downloads;
+        }
+        return b.rating - a.rating;
+      });
+
+      // Take the top 4
+      setPopularModels(sortedModels.slice(0, 4));
+
+    } catch (error) {
+      console.error('Network Error during model fetch:', error);
+      // Fallback to a predefined list if API fails completely
+      setPopularModels([
+        { name: 'BERT-Large', category: 'NLP', downloads: 45.2, rating: 4.9, description: 'State-of-the-art transformer for text classification and NER', tags: ['Transformer', 'Classification', 'HuggingFace'], performance: '98.5%', speed: '45ms' },
+        { name: 'GPT-3.5 Turbo', category: 'Text Generation', downloads: 52.1, rating: 4.9, description: 'Advanced language model for text generation and completion', tags: ['Generative', 'OpenAI', 'API'], performance: '96.8%', speed: '120ms' },
+        { name: 'YOLOv8', category: 'Object Detection', downloads: 29.5, rating: 4.9, description: 'Real-time object detection with state-of-the-art accuracy', tags: ['Detection', 'Real-time', 'Ultralytics'], performance: '99.1%', speed: '8ms' },
+        { name: 'ResNet-152', category: 'Computer Vision', downloads: 38.7, rating: 4.8, description: 'Deep residual network for image recognition and transfer learning', tags: ['CNN', 'ImageNet', 'PyTorch'], performance: '97.2%', speed: '32ms' }
+      ].slice(0, 4).map(m => ({ ...m, downloads: `${m.downloads}M` }))); // Re-map downloads back to string for UI
+    }
+  }, []);
+
+  const getAIResponse = async (userMessageText) => {
+    setIsLoading(true);
+    setMessages(prev => [...prev, { type: 'assistant-loading', text: '...' }]);
+    const token = localStorage.getItem('authToken');
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/chat`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}` 
+            },
+            body: JSON.stringify({ message: userMessageText })
+        });
+
+        if (!response.ok) {
+            const errorBody = await response.json();
+            throw new Error(errorBody.message || 'The AI service failed to respond.');
+        }
+
+        const result = await response.json();
+        const aiText = result.reply || "Sorry, I couldn't get a proper response. Please try again.";
+
+        setMessages(prev => {
+            const updatedMessages = prev.filter(msg => msg.type !== 'assistant-loading');
+            return [...updatedMessages, { type: 'assistant', text: aiText.trim() }];
+        });
+
+    } catch (error) {
+        console.error("Error fetching AI response from backend:", error);
+        setMessages(prev => {
+            const updatedMessages = prev.filter(msg => msg.type !== 'assistant-loading');
+            return [...updatedMessages, { type: 'assistant', text: `Oops! Something went wrong: ${error.message}` }];
+        });
+    } finally {
+        setIsLoading(false);
+    }
+  };
+
+  const handleSendMessage = () => {
+    if (chatMessage.trim() === '' || isLoading) return;
+    const userMessage = { type: 'user', text: chatMessage };
+    setMessages(prev => [...prev, userMessage]);
+    getAIResponse(chatMessage);
+    setChatMessage('');
+  };
+  
+  const handleUploadClick = () => {
+    fileInputRef.current.click();
+  };
+
+  const handleFileChange = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      const userMessageText = `I've uploaded a file named: ${file.name}. What can you tell me about processing this type of file?`;
+      const userMessage = { type: 'user', text: userMessageText };
+      setMessages(prev => [...prev, userMessage]);
+      getAIResponse(userMessageText);
+    }
+  };
+
+  // Fetch data on mount
   useEffect(() => {
     fetchProfile();
-  }, [fetchProfile]);
+    fetchPopularModels(); // Fetch models when component mounts
+  }, [fetchProfile, fetchPopularModels]);
 
   // Theme and mouse tracking
   useEffect(() => {
@@ -222,18 +364,24 @@ export default function Homepage() {
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [theme]);
 
+  // Auto-scroll chat to the bottom
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
+
   const toggleTheme = () => {
     setTheme(prevTheme => prevTheme === 'light' ? 'dark' : 'light');
   };
 
   // --- API Save Logic (Uses actual API endpoint) ---
-  // If your backend expects a PUT request to update, change 'POST' to 'PUT'.
   const handleProfileUpdate = useCallback(async (updatedData) => {
     try {
       const token = localStorage.getItem('authToken');
       
       const response = await fetch(`${API_BASE_URL}/api/profile`, {
-        method: 'PUT', // Keep as 'POST' as requested, but often 'PUT' is used for updates
+        method: 'PUT', // PUT is standard for profile updates
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -251,6 +399,8 @@ export default function Homepage() {
       // Assuming the backend returns the *newly saved* profile data
       const data = await response.json();
       setProfile(data);
+      // Update session storage after a successful save
+      sessionStorage.setItem('userProfile', JSON.stringify(data));
       setShowEditModal(false);
       
     } catch (error) {
@@ -260,64 +410,8 @@ export default function Homepage() {
       throw error;
     }
   }, []);
-
-
-  const popularModels = [
-    {
-      name: 'BERT-Large',
-      category: 'NLP',
-      downloads: '45.2M',
-      rating: 4.9,
-      description: 'State-of-the-art transformer for text classification and NER',
-      tags: ['Transformer', 'Classification', 'HuggingFace'],
-      performance: '98.5%',
-      speed: '45ms'
-    },
-    {
-      name: 'ResNet-152',
-      category: 'Computer Vision',
-      downloads: '38.7M',
-      rating: 4.8,
-      description: 'Deep residual network for image recognition and transfer learning',
-      tags: ['CNN', 'ImageNet', 'PyTorch'],
-      performance: '97.2%',
-      speed: '32ms'
-    },
-    {
-      name: 'GPT-3.5 Turbo',
-      category: 'Text Generation',
-      downloads: '52.1M',
-      rating: 4.9,
-      description: 'Advanced language model for text generation and completion',
-      tags: ['Generative', 'OpenAI', 'API'],
-      performance: '96.8%',
-      speed: '120ms'
-    },
-    {
-      name: 'YOLOv8',
-      category: 'Object Detection',
-      downloads: '29.5M',
-      rating: 4.9,
-      description: 'Real-time object detection with state-of-the-art accuracy',
-      tags: ['Detection', 'Real-time', 'Ultralytics'],
-      performance: '99.1%',
-      speed: '8ms'
-    }
-  ];
-
-  const handleSendMessage = () => {
-    if (chatMessage.trim()) {
-      setMessages([...messages, { type: 'user', text: chatMessage }]);
-      setChatMessage('');
-      
-      setTimeout(() => {
-        setMessages(prev => [...prev, {
-          type: 'assistant',
-          text: 'Based on your requirements, I recommend exploring BERT for NLP tasks or training a custom model with Cerebras acceleration. Would you like to see benchmark comparisons?'
-        }]);
-      }, 1200);
-    }
-  };
+  
+  // NOTE: The original handleSendMessage has been replaced with the new one.
 
   if (loading) {
     return (
@@ -423,22 +517,22 @@ export default function Homepage() {
               </button>
               
               {['MarketPlace', 'My Models', 'Deployments'].map((item) => (
-  <button
-    key={item}
-    onClick={() => {
-      if (item === 'MarketPlace') {
-        window.location.href = '/marketplace'
-      } else {
-        window.location.href = '#'
-      }
-    }}
-    className={`hidden md:block ${currentTheme.textSecondary} hover:${
-      isDark ? 'text-[#00FFE0] hover:scale-105' : 'text-[#1E90FF] hover:scale-105'
-    } transition-all font-semibold`}
-  >
-    {item}
-  </button>
-))}
+                <button
+                  key={item}
+                  onClick={() => {
+                    if (item === 'MarketPlace') {
+                      window.location.href = '/marketplace'
+                    } else {
+                      window.location.href = '#'
+                    }
+                  }}
+                  className={`hidden md:block ${currentTheme.textSecondary} hover:${
+                    isDark ? 'text-[#00FFE0] hover:scale-105' : 'text-[#1E90FF] hover:scale-105'
+                  } transition-all font-semibold`}
+                >
+                  {item}
+                </button>
+              ))}
 
 
               {/* Profile Menu */}
@@ -452,11 +546,13 @@ export default function Homepage() {
                 </button>
 
                 {showProfileMenu && (
-                  <div className={`absolute right-0 mt-3 w-64 ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-2xl shadow-2xl overflow-hidden transition-all duration-300`}
-                       style={{ boxShadow: isDark ? '0 0 30px rgba(0,255,224,0.3)' : '0 0 30px rgba(30,144,255,0.3)' }}
-                       onMouseLeave={() => setShowProfileMenu(false)}
+                  <div 
+                    id="profile-menu"
+                    className={`absolute right-0 mt-3 w-64 ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-2xl shadow-2xl overflow-hidden transition-all duration-300`}
+                    style={{ boxShadow: isDark ? '0 0 30px rgba(0,255,224,0.3)' : '0 0 30px rgba(30,144,255,0.3)' }}
+                    onMouseLeave={() => setShowProfileMenu(false)}
                   >
-                    <div className={`p-4 bg-gradient-to-r from-[#1E90FF]/30 to-[#9B59B6]/30 border-b ${currentTheme.cardBorder}`}>
+                    <div className={`p-4 bg-gradient-to-r from-[#1E90FF]/40 to-[#9B59B6]/40 border-b ${currentTheme.cardBorder}`}>
                       <p className={`font-bold ${currentTheme.textPrimary}`}>{profile?.name}</p>
                       <p className={`text-sm ${currentTheme.textSecondary}`}>{profile?.email}</p>
                       {profile?.company && (
@@ -534,22 +630,34 @@ export default function Homepage() {
               </div>
             </div>
 
-            <div className={`flex-1 overflow-y-auto p-6 space-y-4 ${isDark ? 'dark-scrollbar' : 'light-scrollbar'}`}>
+            <div 
+              ref={chatContainerRef} // Added ref here
+              className={`flex-1 overflow-y-auto p-6 space-y-4 ${isDark ? 'dark-scrollbar' : 'light-scrollbar'}`}>
               {messages.map((msg, index) => (
                 <div key={index} className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[85%] rounded-2xl p-4 transition-all duration-300 ${
-                    msg.type === 'user' 
-                      ? 'bg-gradient-to-r from-[#1E90FF] to-[#9B59B6] text-white shadow-[0_0_15px_rgba(30,144,255,0.4)]' 
-                      : `${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} ${currentTheme.textPrimary} hover:border-[#00FFE0]`
-                  }`}>
-                    {msg.type === 'assistant' && (
-                      <div className="flex items-center space-x-2 mb-2">
-                        <Sparkles className={`w-4 h-4 text-[#00FFE0]`} />
-                        <span className={`text-xs text-[#00FFE0] font-semibold`}>AI Advisor</span>
+                  {/* Assistant loading state message */}
+                  {msg.type === 'assistant-loading' ? (
+                    <div className={`${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-2xl p-4 transition-all duration-300`}>
+                      <div className="flex items-center space-x-2">
+                        <Sparkles className={`w-4 h-4 text-[#00FFE0] animate-pulse`} />
+                        <span className={`text-sm ${currentTheme.textPrimary}`}>Thinking...</span>
                       </div>
-                    )}
-                    <p className="text-sm leading-relaxed">{msg.text}</p>
-                  </div>
+                    </div>
+                  ) : (
+                    <div className={`max-w-[85%] rounded-2xl p-4 transition-all duration-300 ${
+                      msg.type === 'user' 
+                        ? 'bg-gradient-to-r from-[#1E90FF] to-[#9B59B6] text-white shadow-[0_0_15px_rgba(30,144,255,0.4)]' 
+                        : `${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} ${currentTheme.textPrimary} hover:border-[#00FFE0]`
+                    }`}>
+                      {msg.type === 'assistant' && (
+                        <div className="flex items-center space-x-2 mb-2">
+                          <Sparkles className={`w-4 h-4 text-[#00FFE0]`} />
+                          <span className={`text-xs text-[#00FFE0] font-semibold`}>AI Advisor</span>
+                        </div>
+                      )}
+                      <p className="text-sm leading-relaxed">{msg.text}</p>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -576,13 +684,29 @@ export default function Homepage() {
                   onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
                   placeholder="Describe your project..."
                   className={`flex-1 ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-full px-6 py-3 ${currentTheme.textPrimary} focus:outline-none focus:ring-2 focus:ring-[#00FFE0] transition-all duration-300 ${isDark ? 'focus:shadow-[0_0_15px_rgba(0,255,224,0.5)]' : 'focus:shadow-[0_0_15px_rgba(30,144,255,0.5)]'}`}
+                  disabled={isLoading}
                 />
-                <button className={`w-12 h-12 ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} hover:border-[#00FFE0] rounded-full flex items-center justify-center transition-all hover:scale-105`}>
+                
+                {/* Hidden file input */}
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileChange}
+                  style={{ display: 'none' }}
+                />
+                
+                <button 
+                  onClick={handleUploadClick}
+                  className={`w-12 h-12 ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} hover:border-[#00FFE0] rounded-full flex items-center justify-center transition-all hover:scale-105`}
+                  disabled={isLoading}
+                >
                   <Upload className={`w-5 h-5 ${isDark ? 'text-[#00FFE0]' : 'text-[#1E90FF]'}`} />
                 </button>
+                
                 <button
                   onClick={handleSendMessage}
-                  className="w-12 h-12 bg-gradient-to-r from-[#00FFE0] to-[#1E90FF] rounded-full flex items-center justify-center hover:scale-110 hover:shadow-[0_0_30px_rgba(0,255,224,0.7)] transition-all duration-300"
+                  className={`w-12 h-12 bg-gradient-to-r from-[#00FFE0] to-[#1E90FF] rounded-full flex items-center justify-center hover:scale-110 hover:shadow-[0_0_30px_rgba(0,255,224,0.7)] transition-all duration-300`}
+                  disabled={isLoading}
                 >
                   <Send className="w-5 h-5 text-black" />
                 </button>
@@ -591,16 +715,35 @@ export default function Homepage() {
           </div>
 
           {/* Right: Marketplace - Glassmorphism applied here */}
-          <div className={`${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-3xl overflow-hidden flex flex-col h-[calc(100vh-320px)] transition-all duration-500 hover:border-[#00FFE0]/60 hover:shadow-[0_0_25px_rgba(0,255,224,0.3)]`}>
+          <div 
+            id="marketplace-panel"
+            className={`${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-3xl overflow-hidden flex flex-col h-[calc(100vh-320px)] transition-all duration-500 hover:border-[#00FFE0]/60 hover:shadow-[0_0_25px_rgba(0,255,224,0.3)]`}
+          >
             <div className={`p-6 border-b ${currentTheme.cardBorder}`}>
               <div className="flex items-center justify-between mb-6">
                 <div>
                   <h2 className={`text-2xl font-bold ${currentTheme.textPrimary} mb-1`} style={{ fontFamily: 'Orbitron, sans-serif' }}>
                     Model <span className={`bg-gradient-to-r from-[#9B59B6] to-[#00FFE0] bg-clip-text text-transparent`}>Marketplace</span>
                   </h2>
-                  <p className={`text-sm ${currentTheme.textSecondary}`}>10,000+ pre-trained models</p>
+                  <p className={`text-sm ${currentTheme.textSecondary}`}>Top models from external aggregators</p>
                 </div>
-                <button className="group px-6 py-2 bg-gradient-to-r from-[#9B59B6] to-[#1E90FF] rounded-full text-white text-sm font-semibold hover:scale-105 hover:shadow-[0_0_20px_rgba(155,89,182,0.5)] transition-all duration-300 flex items-center space-x-2">
+                <button 
+                  onClick={() => {
+                    const rightPanel = document.getElementById('marketplace-panel');
+                    if (rightPanel) {
+                      rightPanel.classList.add('opacity-0', 'scale-95');
+                    }
+                    const profileMenu = document.getElementById('profile-menu');
+                    if (profileMenu) {
+                      profileMenu.style.opacity = '0';
+                      profileMenu.style.pointerEvents = 'none';
+                    }
+                    setTimeout(() => {
+                      window.location.href = '/marketplace';
+                    }, 300);
+                  }}
+                  className="group px-6 py-2 bg-gradient-to-r from-[#9B59B6] to-[#1E90FF] rounded-full text-white text-sm font-semibold hover:scale-105 hover:shadow-[0_0_20px_rgba(155,89,182,0.5)] transition-all duration-300 flex items-center space-x-2"
+                >
                   <span>View All</span>
                   <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                 </button>
@@ -625,68 +768,72 @@ export default function Homepage() {
               <div className="flex items-center justify-between mb-6">
                 <h3 className={`text-lg font-semibold ${currentTheme.textPrimary} flex items-center space-x-2 bg-gradient-to-r from-[#00FFE0] to-[#1E90FF] bg-clip-text text-transparent`}>
                   <TrendingUp className={`w-5 h-5 text-[#00FFE0]`} />
-                  <span>Most Popular This Week</span>
+                  <span>Most Popular (Top 4)</span>
                 </h3>
               </div>
 
               <div className="space-y-4">
-                {popularModels.map((model, index) => (
-                  <div
-                    key={index}
-                    className={`group ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-2xl p-5 transition-all duration-300 cursor-pointer hover:scale-[1.01] hover:shadow-[0_0_25px_rgba(255,77,255,0.3)] hover:border-[#FF4DFF]`}
-                    style={{
-                      borderImage: isDark ? 'linear-gradient(45deg, #00FFE0, #9B59B6) 1' : 'none'
-                    }}
-                  >
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-start space-x-3">
-                        <div className="w-12 h-12 bg-gradient-to-br from-[#1E90FF] to-[#9B59B6] rounded-xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform duration-300">
-                          <Zap className="w-6 h-6 text-white" />
+                {popularModels.length === 0 ? (
+                  <p className={`${currentTheme.textSecondary} text-sm p-4 ${currentTheme.cardSecondaryBg} rounded-xl`}>Loading top models or models not available from the API...</p>
+                ) : (
+                  popularModels.map((model, index) => (
+                    <div
+                      key={index}
+                      className={`group ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-2xl p-5 transition-all duration-300 cursor-pointer hover:scale-[1.01] hover:shadow-[0_0_25px_rgba(255,77,255,0.3)] hover:border-[#FF4DFF]`}
+                      style={{
+                        borderImage: isDark ? 'linear-gradient(45deg, #00FFE0, #9B59B6) 1' : 'none'
+                      }}
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-start space-x-3">
+                          <div className="w-12 h-12 bg-gradient-to-br from-[#1E90FF] to-[#9B59B6] rounded-xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform duration-300">
+                            <Zap className="w-6 h-6 text-white" />
+                          </div>
+                          <div>
+                            <h4 className={`font-bold text-lg group-hover:text-[#00FFE0] transition-colors ${currentTheme.textPrimary}`}>
+                              {model.name}
+                            </h4>
+                            <p className={`text-xs font-semibold text-[#00FFE0]`}>{model.category}</p>
+                          </div>
                         </div>
-                        <div>
-                          <h4 className={`font-bold text-lg group-hover:text-[#00FFE0] transition-colors ${currentTheme.textPrimary}`}>
-                            {model.name}
-                          </h4>
-                          <p className={`text-xs font-semibold text-[#00FFE0]`}>{model.category}</p>
-                        </div>
-                      </div>
-                      <div className={`flex items-center space-x-1 ${currentTheme.cardBg} border ${currentTheme.cardBorder} px-3 py-1 rounded-full`}>
-                        <Star className={`w-3 h-3 text-yellow-300 fill-yellow-300`} />
-                        <span className={`text-xs font-bold ${currentTheme.textPrimary}`}>{model.rating}</span>
-                      </div>
-                    </div>
-
-                    <p className={`text-sm mb-4 leading-relaxed ${currentTheme.textSecondary}`}>{model.description}</p>
-
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      {model.tags.map((tag, tagIndex) => (
-                        <span key={tagIndex} className={`px-3 py-1 bg-black/30 border border-[#1E90FF]/30 rounded-full text-xs text-[#1E90FF] transition-colors group-hover:text-white group-hover:bg-[#1E90FF]`}>
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-
-                    <div className={`flex items-center justify-between pt-3 border-t ${currentTheme.cardBorder}`}>
-                      <div className={`flex items-center space-x-4 text-xs ${currentTheme.textSecondary}`}>
-                        <div className="flex items-center space-x-1">
-                          <Users className={`w-4 h-4 text-[#00FFE0]`} />
-                          <span>{model.downloads}</span>
-                        </div>
-                        <div className="flex items-center space-x-1">
-                          <TrendingUp className={`w-4 h-4 text-[#1E90FF]`} />
-                          <span>{model.performance}</span>
-                        </div>
-                        <div className="flex items-center space-x-1">
-                          <Clock className={`w-4 h-4 text-[#9B59B6]`} />
-                          <span>{model.speed}</span>
+                        <div className={`flex items-center space-x-1 ${currentTheme.cardBg} border ${currentTheme.cardBorder} px-3 py-1 rounded-full`}>
+                          <Star className={`w-3 h-3 text-yellow-300 fill-yellow-300`} />
+                          <span className={`text-xs font-bold ${currentTheme.textPrimary}`}>{model.rating.toFixed(1)}</span>
                         </div>
                       </div>
-                      <button className="px-4 py-1.5 bg-gradient-to-r from-[#00FFE0] to-[#1E90FF] rounded-full text-xs font-bold text-black opacity-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110">
-                        Deploy Now
-                      </button>
+
+                      <p className={`text-sm mb-4 leading-relaxed ${currentTheme.textSecondary}`}>{model.description}</p>
+
+                      <div className="flex flex-wrap gap-2 mb-4">
+                        {model.tags && model.tags.slice(0, 3).map((tag, tagIndex) => (
+                          <span key={tagIndex} className={`px-3 py-1 bg-black/30 border border-[#1E90FF]/30 rounded-full text-xs text-[#1E90FF] transition-colors group-hover:text-white group-hover:bg-[#1E90FF]`}>
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+
+                      <div className={`flex items-center justify-between pt-3 border-t ${currentTheme.cardBorder}`}>
+                        <div className={`flex items-center space-x-4 text-xs ${currentTheme.textSecondary}`}>
+                          <div className="flex items-center space-x-1">
+                            <Users className={`w-4 h-4 text-[#00FFE0]`} />
+                            <span>{typeof model.downloads === 'number' ? `${model.downloads.toFixed(1)}M` : model.downloads}</span>
+                          </div>
+                          <div className="flex items-center space-x-1">
+                            <TrendingUp className={`w-4 h-4 text-[#1E90FF]`} />
+                            <span>{model.performance}</span>
+                          </div>
+                          <div className="flex items-center space-x-1">
+                            <Clock className={`w-4 h-4 text-[#9B59B6]`} />
+                            <span>{model.speed}</span>
+                          </div>
+                        </div>
+                        <button className="px-4 py-1.5 bg-gradient-to-r from-[#00FFE0] to-[#1E90FF] rounded-full text-xs font-bold text-black opacity-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110">
+                          Deploy Now
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           </div>

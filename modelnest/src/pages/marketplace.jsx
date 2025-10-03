@@ -3,17 +3,28 @@ import { Search, Filter, Zap, Star, Users, TrendingUp, Clock, Shuffle, X, BarCha
 
 const API_BASE_URL = import.meta.env.VITE_BASE_URL;
 
-
 const colorScheme = {
   dark: {
     bgPrimary: 'bg-[#050505]',
     textPrimary: 'text-[#E6E6E6]',
     textSecondary: 'text-[#A6A6A6]',
-    // Updated cardBg to be slightly less opaque for better modern feel
-    cardBg: 'bg-black/30 backdrop-blur-xl', 
+    cardBg: 'bg-black/30 backdrop-blur-xl',
     cardSecondaryBg: 'bg-black/15 backdrop-blur-lg',
     cardBorder: 'border-[#00FFE0]/30',
     scrollbarThumb: '#00FFE0',
+    navBg: 'bg-black/20',
+    shadow: 'shadow-lg',
+  },
+  light: {
+    bgPrimary: 'bg-[#f5f5ed]',
+    textPrimary: 'text-gray-900',
+    textSecondary: 'text-gray-600',
+    cardBg: 'bg-white/80 backdrop-blur-lg',
+    cardSecondaryBg: 'bg-gray-100/80 backdrop-blur-md',
+    cardBorder: 'border-gray-300',
+    scrollbarThumb: '#1E90FF',
+    navBg: 'bg-white/80',
+    shadow: 'shadow-md',
   },
 };
 
@@ -36,7 +47,6 @@ const CATEGORY_DATA = [
     { name: 'Data Augmentation/Preprocessing', short: 'Data Prep', tags: ['SMOTE', 'Noise Injection', 'Image Augmentation', 'NLP Augmentation', 'Feature Scaling'] },
 ];
 
-// Fallback Model Data Structure (Used only if API call fails or is still loading)
 const FALLBACK_MODELS = [
   { id: 1, name: 'BERT-Large', category: 'NLP', performance: 98.5, speed: 45, downloads: 45.2, rating: 4.9, description: 'State-of-the-art transformer for text classification and NER.', tags: ['Transformer', 'Text Classification', 'HuggingFace', 'Fast'], reviews: 1540, platform: 'Hugging Face', url: 'https://huggingface.co/bert-large-uncased' },
   { id: 2, name: 'GPT-4o', category: 'Generation', performance: 99.0, speed: 80, downloads: 99.9, rating: 5.0, tags: ['GPT', 'Multimodal', 'OpenAI'], reviews: 5000, platform: 'OpenAI', url: 'https://platform.openai.com/docs/models/gpt-4o' },
@@ -50,7 +60,6 @@ const FALLBACK_MODELS = [
   { id: 10, name: 'GPT-2', category: 'Generation', performance: 88.0, speed: 30, downloads: 85.0, rating: 4.5, tags: ['Text Generation', 'Transformer'], reviews: 4500, platform: 'Hugging Face', url: 'https://huggingface.co/gpt2' },
 ];
 
-// Helper component for star rating visualization
 const RatingStars = ({ rating }) => {
   const fullStars = Math.floor(rating);
   const stars = [];
@@ -65,16 +74,13 @@ const RatingStars = ({ rating }) => {
   return <div className="flex space-x-0.5">{stars}</div>;
 };
 
-// Helper function to render avatar initial (Placeholder as profile state is not here)
 const renderAvatarInitial = (name) => {
     return name ? name.charAt(0).toUpperCase() : 'U';
 };
 
-
-// --- Model Comparison Modal Component (Modern/Premium Restyle) ---
-const ComparisonModal = ({ selectedModels, onClose, modelsData }) => {
+const ComparisonModal = ({ selectedModels, onClose, modelsData, currentTheme }) => {
   const models = modelsData.filter(m => selectedModels.includes(m.id));
-  const currentTheme = colorScheme.dark;
+  const isDark = currentTheme === colorScheme.dark;
 
   if (models.length < 2) {
     return (
@@ -91,7 +97,6 @@ const ComparisonModal = ({ selectedModels, onClose, modelsData }) => {
     );
   }
   
-  // Use modelsData (all fetched models) to determine global max values for normalization
   const maxPerformanceGlobal = Math.max(...modelsData.map(m => m.performance)) || 100;
   const maxDownloadsGlobal = Math.max(...modelsData.map(m => m.downloads)) || 100;
   const visualizationMaxSpeed = Math.max(...modelsData.map(m => m.speed)) || 180;
@@ -105,9 +110,8 @@ const ComparisonModal = ({ selectedModels, onClose, modelsData }) => {
 
   const getBarWidth = (value, metric) => {
     if (metric.key === 'speed') {
-      // Lower latency (speed) is better, so reverse the bar fill logic
       const normalized = 100 - (value / metric.max * 100);
-      return Math.max(10, normalized); // Ensure min width for visual presence
+      return Math.max(10, normalized);
     }
     return (value / metric.max) * 100;
   };
@@ -128,7 +132,6 @@ const ComparisonModal = ({ selectedModels, onClose, modelsData }) => {
           <span className="bg-gradient-to-r from-[#00FFE0] to-[#1E90FF] bg-clip-text text-transparent">Premium Model Comparison</span>
         </h3>
 
-        {/* Model Header Row */}
         <div className="grid grid-cols-4 gap-4 text-sm font-semibold mb-6">
           <div className="col-span-1 text-left text-[#A6A6A6] pt-2">Model / Metrics</div>
           {models.map((model, index) => (
@@ -143,7 +146,6 @@ const ComparisonModal = ({ selectedModels, onClose, modelsData }) => {
           ))}
         </div>
 
-        {/* --- Comparison Metrics Section --- */}
         <div className="space-y-6 overflow-y-auto max-h-[50vh] pr-4 dark-scrollbar">
           {metrics.map((metric, metricIndex) => (
             <div key={metric.key} className="p-3 bg-black/20 rounded-lg border border-[#00FFE0]/10">
@@ -154,9 +156,7 @@ const ComparisonModal = ({ selectedModels, onClose, modelsData }) => {
               </h4>
               
               <div className="grid grid-cols-4 gap-4 items-center">
-                {/* Empty left column for alignment */}
                 <div className="col-span-1"></div> 
-
                 {models.map((model, modelIndex) => {
                   const value = model[metric.key];
                   const barWidth = getBarWidth(value, metric);
@@ -176,7 +176,6 @@ const ComparisonModal = ({ selectedModels, onClose, modelsData }) => {
                             }}
                           />
                         </div>
-                        {/* Numerical Value Overlay */}
                         <span className={`absolute right-0 top-1/2 -translate-y-1/2 transform text-xs px-2 py-0.5 rounded-full font-bold transition-all duration-500`}
                               style={{
                                 backgroundColor: colors[modelIndex % colors.length],
@@ -194,7 +193,6 @@ const ComparisonModal = ({ selectedModels, onClose, modelsData }) => {
             </div>
           ))}
 
-          {/* Reviews/Community Metrics (Cleaned up) */}
           <div className="pt-6 border-t border-[#00FFE0]/20">
             <h4 className="font-semibold text-lg text-[#1E90FF] mb-4 flex items-center space-x-2">
               <MessageSquare className="w-5 h-5" />
@@ -235,18 +233,15 @@ const ComparisonModal = ({ selectedModels, onClose, modelsData }) => {
 };
 
 // --- Filter Popover Component ---
-const FilterPopover = ({ filters, setFilters, uniqueCategories, uniqueTags, onClose, currentTheme, CATEGORY_DATA }) => {
+const FilterPopover = ({ filters, setFilters, uniqueCategories, uniqueTags, onClose, currentTheme }) => {
   const popoverRef = useRef();
   const TAG_LIMIT = 8;
   const CATEGORY_LIMIT = 4;
   const [showAllTags, setShowAllTags] = useState(false);
   const [showAllCategories, setShowAllCategories] = useState(false);
 
-  // Close when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      // Check if the click occurred outside the popover element
-      // Ensure the filter button itself doesn't close the popover (handled by the parent onClick logic)
       if (popoverRef.current && !popoverRef.current.contains(event.target)) {
         onClose();
       }
@@ -286,7 +281,6 @@ const FilterPopover = ({ filters, setFilters, uniqueCategories, uniqueTags, onCl
       </div>
 
       <div className="space-y-6">
-        {/* Category Filter */}
         <div>
           <h4 className="font-semibold text-sm mb-2 text-[#1E90FF]">Category</h4>
           <div className="space-y-2">
@@ -312,7 +306,6 @@ const FilterPopover = ({ filters, setFilters, uniqueCategories, uniqueTags, onCl
           )}
         </div>
         
-        {/* Tags Filter */}
         <div>
           <h4 className="font-semibold text-sm mb-2 text-[#1E90FF]">Tags</h4>
           <div className="flex flex-wrap gap-2 pr-1">
@@ -340,7 +333,6 @@ const FilterPopover = ({ filters, setFilters, uniqueCategories, uniqueTags, onCl
           )}
         </div>
 
-        {/* Rating Filter */}
         <div>
           <h4 className="font-semibold text-sm mb-2 text-[#1E90FF]">Minimum Rating</h4>
           <div className="flex items-center space-x-2">
@@ -361,13 +353,6 @@ const FilterPopover = ({ filters, setFilters, uniqueCategories, uniqueTags, onCl
   );
 };
 
-/**
- * Scoring function for Smart Search Relevance
- * Gives higher score to name matches, then category/tags, then description.
- * @param {object} model - The model object
- * @param {string} query - The search query
- * @returns {number} The relevance score
- */
 const calculateRelevance = (model, query) => {
     const q = query.toLowerCase().trim();
     if (!q) return 0;
@@ -380,35 +365,26 @@ const calculateRelevance = (model, query) => {
         model.description
     ].map(s => s.toLowerCase());
 
-    // 1. Exact Name Match (Highest Priority)
     if (model.name.toLowerCase() === q) {
         score += 1000;
-    }
-    // 2. Name Starts With
-    else if (model.name.toLowerCase().startsWith(q)) {
+    } else if (model.name.toLowerCase().startsWith(q)) {
         score += 500;
-    }
-    // 3. Name Partial Match
-    else if (model.name.toLowerCase().includes(q)) {
+    } else if (model.name.toLowerCase().includes(q)) {
         score += 300;
     }
 
-    // 4. Platform Match (New scoring field)
     if (model.platform.toLowerCase().includes(q)) {
         score += 200;
     }
 
-    // 5. Category Match
     if (model.category.toLowerCase().includes(q)) {
         score += 150;
     }
 
-    // 6. Tag Match
     if (model.tags.some(tag => tag.toLowerCase().includes(q))) {
         score += 100;
     }
 
-    // 7. Description Match
     if (model.description.toLowerCase().includes(q)) {
         score += 50;
     }
@@ -418,7 +394,7 @@ const calculateRelevance = (model, query) => {
 
 
 // --- Main Marketplace Component ---
-export default function Marketplace() {
+export default function Marketplace({ theme, currentTheme, toggleTheme }) {
   const [allModels, setAllModels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -433,40 +409,47 @@ export default function Marketplace() {
   const [showCompareModal, setShowCompareModal] = useState(false);
   const [showFilterPopover, setShowFilterPopover] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
-  const [showProfileMenu, setShowProfileMenu] = useState(false); // Added for Navbar
-  const [showAIChatPopup, setShowAIChatPopup] = useState(false); // State for AI Chat popup
-  const [aiChatPopupMessage, setAIChatPopupMessage] = useState(''); // State for AI Chat message
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showAIChatPopup, setShowAIChatPopup] = useState(false);
+  const [aiChatPopupMessage, setAIChatPopupMessage] = useState('');
   
-  // New state for pagination
   const [displayedModels, setDisplayedModels] = useState([]);
-  const [pageSize] = useState(9); // Show 9 models at a time
-  const [nextModelIndex, setNextModelIndex] = useState(0); // Index for lazy loading
+  const [pageSize] = useState(9);
+  const [nextModelIndex, setNextModelIndex] = useState(0);
 
-  const currentTheme = colorScheme.dark;
-  const isDark = true; // Hardcoded as only dark theme is defined here
+  const isDark = theme === 'dark';
+  
+  const [profile, setProfile] = useState(null);
 
-  // --- AI Chat Popup Effects ---
   useEffect(() => {
-    // Function to set message and start 30s auto-dismiss timer
+    try {
+      const storedProfile = sessionStorage.getItem('userProfile');
+      if (storedProfile) {
+        setProfile(JSON.parse(storedProfile));
+      }
+    } catch (e) {
+      console.error("Failed to load profile from session storage:", e);
+    }
+  }, []);
+
+  useEffect(() => {
     const setTimedAIChatPopup = (message) => {
         setAIChatPopupMessage(message);
         setShowAIChatPopup(true);
 
         const dismissTimer = setTimeout(() => {
             setShowAIChatPopup(false);
-        }, 30000); // Popup disappears after 30 seconds
+        }, 30000); 
 
         return dismissTimer;
     };
 
     let timer1Dismiss, timer2Dismiss;
     
-    // Message 1: Appears after 5 seconds
     const timer1 = setTimeout(() => {
         timer1Dismiss = setTimedAIChatPopup("Didn't find your required model? Train the model by just a simple prompt!");
     }, 5000);
 
-    // Message 2: Appears after 3 minutes (180,000 ms)
     const timer2 = setTimeout(() => {
         timer2Dismiss = setTimedAIChatPopup("Need help choosing a model? Ask our AI Advisor!");
     }, 180000);
@@ -479,7 +462,6 @@ export default function Marketplace() {
     };
   }, []);
 
-  // --- Data Fetching Effect ---
   useEffect(() => {
     const fetchModels = async () => {
       setLoading(true);
@@ -493,11 +475,9 @@ export default function Marketplace() {
 
         const data = await response.json();
         
-        // Ensure IDs are unique and numerical for use in comparison logic
         const modelsWithUniqueIds = data.map((model, index) => ({
             ...model,
-            id: model.id || (index + 1), // Use existing ID or fall back to index
-            // Ensure necessary fields exist for safety
+            id: model.id || (index + 1),
             platform: model.platform || 'Unknown',
             tags: model.tags || [],
             performance: model.performance || 0,
@@ -508,13 +488,11 @@ export default function Marketplace() {
         }));
         
         setAllModels(modelsWithUniqueIds);
-        // Set initial displayed models
         setDisplayedModels(modelsWithUniqueIds.slice(0, pageSize));
         setNextModelIndex(pageSize);
       } catch (e) {
         console.error("Fetch Error:", e);
-        setError(`Failed to load data. Using fallback models. Check backend URL: ${API_BASE_URL}`);
-        // Use a small fallback set if the API fails
+        setError(`Failed to load data.....`);
         setAllModels(FALLBACK_MODELS);
         setDisplayedModels(FALLBACK_MODELS.slice(0, pageSize));
         setNextModelIndex(pageSize);
@@ -524,18 +502,15 @@ export default function Marketplace() {
     };
 
     fetchModels();
-  }, []); // Run only on initial mount
+  }, []);
 
-  // Derive unique filter options based on the static data structure
   const uniqueCategories = useMemo(() => CATEGORY_DATA.map(cat => cat.short), []);
   const uniqueTags = useMemo(() => {
       const allTags = CATEGORY_DATA.flatMap(cat => cat.tags);
-      return [...new Set(allTags)].sort(); // Sort tags alphabetically
+      return [...new Set(allTags)].sort();
   }, []);
 
-  // Filtered model list and Smart Search
   const filteredModels = useMemo(() => {
-    // FIX: Apply relevance filter only if searchTerm is not empty
     let models = allModels;
 
     if (searchTerm.trim() !== '') {
@@ -543,42 +518,29 @@ export default function Marketplace() {
             ...model,
             relevance: calculateRelevance(model, searchTerm)
         })).filter(model => model.relevance > 0);
-        // Sort by relevance (descending)
         models.sort((a, b) => b.relevance - a.relevance);
     } else {
-      // If no search term, ensure relevance is 0 (or a neutral score) and skip the filter 
       models = allModels.map(model => ({ ...model, relevance: 0 }));
     }
 
-    // Apply other filters to the (potentially) searched list
     models = models.filter(model => {
-      // Category filter (uses short name)
       if (filters.category.length > 0 && !filters.category.includes(model.category)) return false;
-
-      // Tag filter
       if (filters.tags.length > 0) {
         const hasMatchingTag = filters.tags.some(selectedTag => model.tags.includes(selectedTag));
         if (!hasMatchingTag) return false;
       }
-      
-      // Rating filter
       if (model.rating < filters.minRating) return false;
-
       return true;
     });
 
     return models;
   }, [searchTerm, filters, allModels]);
 
-
-  // Effect to reset pagination when filters or search terms change
   useEffect(() => {
     setDisplayedModels(filteredModels.slice(0, pageSize));
     setNextModelIndex(pageSize);
   }, [filteredModels, pageSize]);
 
-
-  // Suggestion logic
   useEffect(() => {
     const q = searchTerm.toLowerCase().trim();
     if (q.length < 2) {
@@ -593,20 +555,19 @@ export default function Marketplace() {
       }))
       .filter(s => s.score > 0)
       .sort((a, b) => b.score - a.score)
-      .slice(0, 5); // Limit suggestions
+      .slice(0, 5);
 
     setSuggestions(suggested.map(s => s.name));
   }, [searchTerm, allModels]);
 
-  // Handle Model Selection for Comparison
   const toggleCompare = (modelId) => {
     setSelectedForCompare(prev => {
       if (prev.includes(modelId)) {
         return prev.filter(id => id !== modelId);
-      } else if (prev.length < 3) { // Limit comparison to 3 models
+      } else if (prev.length < 3) {
         return [...prev, modelId];
       }
-      return prev; // Do nothing if already maxed out
+      return prev;
     });
   };
 
@@ -622,19 +583,12 @@ export default function Marketplace() {
     setShowFilterPopover(false);
   };
   
-  // Placeholder for profile object (since the Marketplace doesn't manage it)
-  const profile = { name: "Ravi Sharma", email: "ravi.s@example.com", company: "ModelNest Corp", role: "AI Developer" };
-  
-  // Placeholder for toggleTheme function
-  const toggleTheme = () => { console.log("Theme Toggle Placeholder"); }; 
-
-
   if (loading) {
     return (
         <div className={`min-h-screen ${currentTheme.bgPrimary} ${currentTheme.textPrimary} flex items-center justify-center relative overflow-hidden font-sans`}>
             <div className="text-center z-10">
                 <div className="w-16 h-16 border-4 border-[#00FFE0]/20 border-t-[#00FFE0] rounded-full animate-spin mb-4 mx-auto" />
-                <p className="text-xl text-[#00FFE0]">Fetching models from {API_BASE_URL}...</p>
+                <p className="text-xl text-[#00FFE0]">Fetching models from platforms...</p>
                 <p className="text-sm text-[#A6A6A6] mt-2">Aggregating data from multiple platforms...</p>
             </div>
             <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
@@ -648,8 +602,7 @@ export default function Marketplace() {
   }
 
   return (
-    <div className={`min-h-screen ${currentTheme.bgPrimary} ${currentTheme.textPrimary} relative overflow-hidden font-sans pt-20`}> {/* Added pt-20 to account for fixed navbar height */}
-      {/* Navigation - Glassmorphism applied here (FIXED) */}
+    <div className={`min-h-screen ${currentTheme.bgPrimary} ${currentTheme.textPrimary} relative overflow-hidden font-sans pt-20`}>
       <nav className={`fixed top-0 left-0 right-0 z-50 ${currentTheme.cardBg} border-b ${currentTheme.cardBorder} transition-colors duration-500`}>
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -662,7 +615,6 @@ export default function Marketplace() {
               </span>
             </div>
             <div className="flex items-center space-x-6">
-              {/* Theme Toggle */}
               <button
                 onClick={toggleTheme}
                 className={`p-2 rounded-full transition-colors duration-300 ${isDark ? 'bg-black/30 hover:bg-black/50 text-[#00FFE0]' : 'bg-white/30 hover:bg-white/50 text-[#1E90FF]'}`}
@@ -672,10 +624,8 @@ export default function Marketplace() {
                 {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </button>
               
-              {/* Navigation Links */}
               {[
                 { name: 'Home', url: '/mainpage', icon: Home },
-                { name: 'MarketPlace', url: '/marketplace', icon: Search }, 
                 { name: 'My Models', url: '#', icon: Zap }, 
                 { name: 'Deployments', url: '#', icon: Box }
               ].map((item) => (
@@ -690,7 +640,6 @@ export default function Marketplace() {
                 </a>
               ))}
 
-              {/* Profile Menu (Placeholder) */}
               <div className="relative z-50">
                 <button
                   onClick={() => setShowProfileMenu(!showProfileMenu)}
@@ -705,7 +654,7 @@ export default function Marketplace() {
                        style={{ boxShadow: isDark ? '0 0 30px rgba(0,255,224,0.3)' : '0 0 30px rgba(30,144,255,0.3)' }}
                        onMouseLeave={() => setShowProfileMenu(false)}
                   >
-                    <div className={`p-4 bg-gradient-to-r from-[#1E90FF]/30 to-[#9B59B6]/30 border-b ${currentTheme.cardBorder}`}>
+                    <div className={`p-4 bg-gradient-to-r from-[#1E90FF]/40 to-[#9B59B6]/40 border-b ${currentTheme.cardBorder}`}>
                       <p className={`font-bold ${currentTheme.textPrimary}`}>{profile?.name}</p>
                       <p className={`text-sm ${currentTheme.textSecondary}`}>{profile?.email}</p>
                       {profile?.company && (
@@ -714,7 +663,6 @@ export default function Marketplace() {
                     </div>
                     <div className="p-2">
                       <button
-                        // Placeholder for opening settings modal
                         onClick={() => { console.log("Open Settings Modal"); setShowProfileMenu(false); }}
                         className={`w-full flex items-center space-x-3 px-4 py-3 hover:bg-gradient-to-r hover:from-[#00FFE0]/20 hover:to-[#1E90FF]/20 rounded-xl transition-all ${currentTheme.textPrimary}`}
                       >
@@ -735,24 +683,21 @@ export default function Marketplace() {
         </div>
       </nav>
 
-      {/* Background Grid (Fixed) */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
         <div className="absolute inset-0" style={{
-          backgroundImage: 'linear-gradient(rgba(0,255,224,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,224,0.04) 1px,transparent 1px)',
+          backgroundImage: isDark ? 'linear-gradient(rgba(0,255,224,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,224,0.04) 1px,transparent 1px)' : 'linear-gradient(rgba(30,144,255,0.08) 1px,transparent 1px),linear-gradient(90deg,rgba(30,144,255,0.08) 1px,transparent 1px)',
           backgroundSize: '40px 40px'
         }} />
       </div>
 
-      {/* Comparison Modal */}
       {showCompareModal && (
         <ComparisonModal
           selectedModels={selectedForCompare}
           onClose={() => setShowCompareModal(false)}
-          modelsData={allModels} // Pass all models for global max calculation
+          modelsData={allModels}
         />
       )}
 
-      {/* Main Content Area */}
       <div className="relative z-10 max-w-7xl mx-auto px-6 py-10">
         <header className="mb-10 p-6 border-b border-[#00FFE0]/20">
           <h1 className="text-5xl font-extrabold mb-2" style={{ fontFamily: 'Orbitron, sans-serif' }}>
@@ -772,17 +717,16 @@ export default function Marketplace() {
           )}
         </header>
 
-        {/* --- Search, Filter & Compare Controls (New Layout) --- */}
         <div className="mb-8 flex space-x-3">
           
-          {/* 1. Filter Button & Popover */}
           <div className="relative z-40">
             <button
               onClick={() => setShowFilterPopover(!showFilterPopover)}
               className={`p-3 rounded-full border ${currentTheme.cardBorder} hover:border-[#00FFE0] transition-all duration-300
                 ${showFilterPopover || filters.category.length > 0 || filters.tags.length > 0 || filters.minRating > 0 
-                    ? 'bg-[#00FFE0] text-black shadow-[0_0_15px_rgba(0,255,224,0.5)]' 
-                    : 'bg-black/30 text-[#00FFE0]'}
+                    ? isDark ? 'bg-[#00FFE0] text-black shadow-[0_0_15px_rgba(0,255,224,0.5)]' : 'bg-[#1E90FF] text-white shadow-[0_0_15px_rgba(30,144,255,0.5)]'
+                    : isDark ? 'bg-black/30 text-[#00FFE0]' : 'bg-gray-200 text-[#1E90FF]'
+                }
               `}
               aria-label="Toggle Filters"
             >
@@ -797,24 +741,21 @@ export default function Marketplace() {
                 uniqueTags={uniqueTags}
                 onClose={() => setShowFilterPopover(false)}
                 currentTheme={currentTheme}
-                CATEGORY_DATA={CATEGORY_DATA}
               />
             )}
           </div>
 
-          {/* 2. Search Bar (Expands to fill space) */}
           <div className="relative flex-1 z-30">
-            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-[#00FFE0]" />
+            <Search className={`absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 ${isDark ? 'text-[#00FFE0]' : 'text-[#1E90FF]'}`} />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              onFocus={() => suggestions.length > 0 && setSuggestions(suggestions)} // Re-show suggestions on focus if populated
+              onFocus={() => suggestions.length > 0 && setSuggestions(suggestions)}
               placeholder={`Search across ${allModels.length} models...`}
               className={`w-full ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-full pl-12 pr-6 py-3 ${currentTheme.textPrimary} focus:outline-none focus:ring-2 focus:ring-[#00FFE0] focus:shadow-[0_0_15px_rgba(0,255,224,0.3)] transition-all`}
             />
 
-            {/* Suggestions Dropdown */}
             {(suggestions.length > 0 && searchTerm.length >= 2) && (
                 <div className={`absolute top-full mt-2 w-full ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-xl shadow-2xl overflow-hidden`}>
                     {suggestions.map((suggestion, index) => (
@@ -824,7 +765,7 @@ export default function Marketplace() {
                                 setSearchTerm(suggestion);
                                 setSuggestions([]);
                             }}
-                            className="w-full text-left px-4 py-2 text-sm text-[#E6E6E6] hover:bg-[#1E90FF]/20 transition-colors"
+                            className={`w-full text-left px-4 py-2 text-sm ${currentTheme.textPrimary} hover:${isDark ? 'bg-[#1E90FF]/20' : 'bg-[#1E90FF]/10'} transition-colors`}
                         >
                             {suggestion}
                         </button>
@@ -833,7 +774,6 @@ export default function Marketplace() {
             )}
           </div>
 
-          {/* 3. Compare Button */}
           <button
             onClick={() => setShowCompareModal(true)}
             disabled={selectedForCompare.length < 2}
@@ -848,16 +788,14 @@ export default function Marketplace() {
             <span>Compare ({selectedForCompare.length}/3)</span>
           </button>
         </div>
-        {/* --- End Controls --- */}
 
-        {/* --- Model Cards --- */}
         <div className="flex-1">
           {displayedModels.length === 0 ? (
             <div className={`text-center p-12 mt-10 ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-3xl`}>
-              <p className="text-xl text-[#A6A6A6] mb-4">No models match your current filters and search term.</p>
+              <p className={`text-xl ${currentTheme.textSecondary} mb-4`}>No models match your current filters and search term.</p>
               <button 
                 onClick={clearAllFilters}
-                className="mt-4 px-6 py-2 bg-black/30 border border-[#9B59B6]/50 text-[#00FFE0] rounded-full hover:border-[#00FFE0] transition-all"
+                className={`mt-4 px-6 py-2 ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} ${currentTheme.textPrimary} rounded-full hover:${isDark ? 'border-[#00FFE0]' : 'border-[#1E90FF]'} transition-all`}
               >
                 Clear Filters
               </button>
@@ -868,11 +806,13 @@ export default function Marketplace() {
                 {displayedModels.map((model) => {
                   const isSelected = selectedForCompare.includes(model.id);
                   const isMaxed = selectedForCompare.length === 3 && !isSelected;
-                  
+                  const tagsToShow = model.tags ? model.tags.slice(0, 4) : [];
+                  const hasMoreTags = model.tags && model.tags.length > 4;
+
                   return (
                     <div
                       key={model.id}
-                      className={`group ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-3xl p-6 transition-all duration-300 hover:scale-[1.01] shadow-xl
+                      className={`group flex flex-col ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-3xl p-6 transition-all duration-300 hover:scale-[1.01] shadow-xl min-h-[420px]
                         ${isSelected 
                           ? 'border-[#00FFE0] ring-4 ring-[#00FFE0]/50 shadow-[0_0_30px_rgba(0,255,224,0.4)]' 
                           : isMaxed 
@@ -885,13 +825,16 @@ export default function Marketplace() {
                           <div className="w-12 h-12 bg-gradient-to-br from-[#1E90FF] to-[#9B59B6] rounded-xl flex items-center justify-center shadow-lg">
                             <Zap className="w-6 h-6 text-white" />
                           </div>
-                          <div>
-                            <h3 className="text-xl font-bold text-white group-hover:text-[#00FFE0] transition-colors">{model.name}</h3>
-                            {/* Display platform under category */}
-                            <p className="text-sm font-semibold text-[#1E90FF]">{model.platform}</p>
+                          <div className="flex-1 min-w-0">
+                            <h3 className={`text-xl font-bold ${currentTheme.textPrimary} group-hover:${isDark ? 'text-[#00FFE0]' : 'text-[#1E90FF]'} transition-colors break-all`} style={{ overflowWrap: 'break-word' }}>
+                                {model.name}
+                            </h3>
+                            <p className="text-sm font-semibold text-[#1E90FF] whitespace-nowrap overflow-hidden text-ellipsis">
+                                {model.platform}
+                            </p>
                           </div>
                         </div>
-                        <div className="flex flex-col items-end space-y-2">
+                        <div className="flex flex-col items-end space-y-2 flex-shrink-0">
                             <div className={`${currentTheme.cardSecondaryBg} border border-[#9B59B6]/30 px-3 py-1 rounded-full flex items-center space-x-2`}>
                                 <RatingStars rating={model.rating} />
                                 <span className="text-sm font-bold text-[#E6E6E6]">{model.rating.toFixed(1)}</span>
@@ -904,7 +847,7 @@ export default function Marketplace() {
                                   ? 'bg-[#00FFE0] text-black hover:bg-[#1E90FF] hover:text-white' 
                                   : isMaxed 
                                     ? 'bg-gray-700 text-gray-400' 
-                                    : 'bg-black/30 text-[#00FFE0] border border-[#00FFE0] hover:bg-[#00FFE0] hover:text-black'
+                                    : `${isDark ? 'bg-black/30 text-[#00FFE0] border border-[#00FFE0] hover:bg-[#00FFE0] hover:text-black' : 'bg-gray-200 text-[#1E90FF] border border-[#1E90FF] hover:bg-[#1E90FF] hover:text-white'}`
                                 }
                               `}
                             >
@@ -913,38 +856,40 @@ export default function Marketplace() {
                         </div>
                       </div>
 
-                      <p className="text-sm mb-4 text-[#A6A6A6]">{model.description}</p>
+                      <p className={`text-sm mb-4 ${currentTheme.textSecondary}`}>{model.description}</p>
                       
-                      {/* Model Metrics */}
                       <div className="flex flex-wrap gap-4 border-t border-[#00FFE0]/20 pt-4">
-                        <div className="flex items-center space-x-1 text-sm text-[#A6A6A6]">
-                          <TrendingUp className="w-4 h-4 text-[#00FFE0]" />
-                          <span className="font-bold text-white">{model.performance}%</span>
+                        <div className={`flex items-center space-x-1 text-sm ${currentTheme.textSecondary}`}>
+                          <TrendingUp className={`w-4 h-4 ${isDark ? 'text-[#00FFE0]' : 'text-[#1E90FF]'}`} />
+                          <span className={`font-bold ${currentTheme.textPrimary}`}>{model.performance}%</span>
                           <span className="text-xs">(Acc)</span>
                         </div>
-                        <div className="flex items-center space-x-1 text-sm text-[#A6A6A6]">
-                          <Clock className="w-4 h-4 text-[#1E90FF]" />
-                          <span className="font-bold text-white">{model.speed}ms</span>
+                        <div className={`flex items-center space-x-1 text-sm ${currentTheme.textSecondary}`}>
+                          <Clock className={`w-4 h-4 ${isDark ? 'text-[#1E90FF]' : 'text-[#9B59B6]'}`} />
+                          <span className={`font-bold ${currentTheme.textPrimary}`}>{model.speed}ms</span>
                           <span className="text-xs">(Latency)</span>
                         </div>
-                        <div className="flex items-center space-x-1 text-sm text-[#A6A6A6]">
-                          <Users className="w-4 h-4 text-[#9B59B6]" />
-                          <span className="font-bold text-white">{model.downloads}M</span>
+                        <div className={`flex items-center space-x-1 text-sm ${currentTheme.textSecondary}`}>
+                          <Users className={`w-4 h-4 ${isDark ? 'text-[#9B59B6]' : 'text-[#00FFE0]'}`} />
+                          <span className={`font-bold ${currentTheme.textPrimary}`}>{model.downloads}M</span>
                           <span className="text-xs">(Downloads)</span>
                         </div>
                       </div>
 
-                      {/* Tags */}
                       <div className="flex flex-wrap gap-2 mt-4">
-                        {model.tags && model.tags.map((tag, tagIndex) => (
-                          <span key={tagIndex} className="px-3 py-1 text-xs rounded-full bg-black/30 border border-[#1E90FF]/30 text-[#1E90FF] transition-colors">
+                        {tagsToShow.map((tag, tagIndex) => (
+                          <span key={tagIndex} className={`px-3 py-1 text-xs rounded-full ${isDark ? 'bg-black/30 border border-[#1E90FF]/30 text-[#1E90FF]' : 'bg-gray-200 border border-[#1E90FF]/50 text-[#1E90FF]'} transition-colors`}>
                             {tag}
                           </span>
                         ))}
+                        {hasMoreTags && (
+                          <span className={`px-3 py-1 text-xs rounded-full ${isDark ? 'bg-black/30 border border-[#1E90FF]/30 text-[#1E90FF]' : 'bg-gray-200 border border-[#1E90FF]/50 text-[#1E90FF]'} transition-colors`}>
+                            ...
+                          </span>
+                        )}
                       </div>
 
-                      {/* View Model Link */}
-                      <div className="mt-6 text-right">
+                      <div className="mt-auto pt-6 text-right">
                         <a 
                           href={model.url}
                           target="_blank"
@@ -959,12 +904,11 @@ export default function Marketplace() {
                   );
                 })}
               </div>
-              {/* Load More Button */}
               {nextModelIndex < filteredModels.length && (
                   <div className="text-center mt-12">
                       <button 
                           onClick={handleLoadMore}
-                          className="px-8 py-3 bg-black/30 border border-[#00FFE0]/50 text-[#00FFE0] rounded-full text-lg font-semibold hover:bg-[#00FFE0]/20 transition-all"
+                          className={`px-8 py-3 ${isDark ? 'bg-black/30 border border-[#00FFE0]/50 text-[#00FFE0] hover:bg-[#00FFE0]/20' : 'bg-gray-200 border border-[#1E90FF]/50 text-[#1E90FF] hover:bg-[#1E90FF]/20'} rounded-full text-lg font-semibold transition-all`}
                       >
                           Load More Models
                       </button>
@@ -975,34 +919,39 @@ export default function Marketplace() {
         </div>
       </div>
       
-      {/* --- Floating AI Chat Button and Popup (FIXED POSITIONING, DYNAMIC WIDTH) --- */}
       <div className="fixed bottom-8 right-8 z-50">
-        {/* Conditional popup message container (Slide-in transition) */}
 <div 
   className={`absolute bottom-full right-0 mb-4 transition-all duration-300 ease-out 
               ${showAIChatPopup ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2 pointer-events-none'}`}
+  // Removed all transform styles from here
 >
-  <div className={`p-4 inline-block ${currentTheme.cardBg} border border-[#00FFE0]/50 rounded-xl shadow-2xl whitespace-normal`}
-       style={{ boxShadow: '0 0 20px rgba(0,255,224,0.5)', maxWidth: '280px' }} 
+  <div 
+    className={`flex flex-col p-4 ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-xl shadow-2xl`}
+    style={{
+      boxShadow: '0 0 20px rgba(0,255,224,0.5)',
+      display: 'inline-block' // This ensures the width fits the content
+    }}
+    // Removed the inline transform style here
   >
-    <div className="flex items-start space-x-2">
-      <Zap className="w-5 h-5 text-[#00FFE0] flex-shrink-0 mt-0.5" />
-      <p className="text-sm text-white leading-snug">{aiChatPopupMessage}</p>
+    {/* Removed the inner div and its transform style. It's no longer needed. */}
+    <div className="flex items-center justify-start mb-2">
+      <Zap className={`w-5 h-5 ${isDark ? 'text-[#00FFE0]' : 'text-[#1E90FF]'}`} />
     </div>
-    <div className="flex justify-end mt-2">
-      <button onClick={() => setShowAIChatPopup(false)} className="text-xs text-[#A6A6A6] hover:text-[#00FFE0] transition-colors">
+    <p className={`text-sm ${currentTheme.textPrimary} leading-snug text-left whitespace-nowrap`}>
+      {aiChatPopupMessage}
+    </p>
+    <div className="mt-2 text-left">
+      <button onClick={() => setShowAIChatPopup(false)} className={`text-xs ${currentTheme.textSecondary} hover:${isDark ? 'text-[#00FFE0]' : 'text-[#1E90FF]'} transition-colors`}>
         Dismiss
       </button>
     </div>
   </div>
 </div>
 
-
         <button 
             onClick={() => {
-                // Placeholder for opening chat interface
                 console.log("AI Chat button clicked");
-                setShowAIChatPopup(false); // Dismiss any current popups
+                setShowAIChatPopup(false);
             }}
             className="w-16 h-16 bg-gradient-to-r from-[#00FFE0] to-[#1E90FF] rounded-full flex items-center justify-center transition-all duration-300 hover:scale-110 relative"
             style={{ 
@@ -1015,15 +964,13 @@ export default function Marketplace() {
       </div>
 
 
-      <style jsx>{`
-        /* Custom Font for Headings */
+      <style jsx="true">{`
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
         
         .font-sans {
             font-family: 'Inter', sans-serif;
         }
 
-        /* Neon Scrollbar for Dark Theme */
         .dark-scrollbar::-webkit-scrollbar {
           width: 8px;
         }
@@ -1037,8 +984,21 @@ export default function Marketplace() {
         .dark-scrollbar::-webkit-scrollbar-thumb:hover {
           background: #1E90FF;
         }
+        
+        .light-scrollbar::-webkit-scrollbar {
+          width: 8px;
+        }
+        .light-scrollbar::-webkit-scrollbar-track {
+          background: #f5f5ed;
+        }
+        .light-scrollbar::-webkit-scrollbar-thumb {
+          background: #1E90FF;
+          border-radius: 4px;
+        }
+        .light-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #00FFE0;
+        }
 
-        /* Neon Pulse Animation for Chat Button */
         @keyframes pulse {
             0% { box-shadow: 0 0 10px rgba(0,255,224,0.7), 0 0 20px rgba(30,144,255,0.3); }
             50% { box-shadow: 0 0 25px rgba(0,255,224,1), 0 0 50px rgba(30,144,255,0.7); }
