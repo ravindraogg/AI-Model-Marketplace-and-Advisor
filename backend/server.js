@@ -84,6 +84,45 @@ const trainedModelSchema = new mongoose.Schema(
 
 const TrainedModel = mongoose.model("TrainedModel", trainedModelSchema);
 
+/**
+ * @desc Schema for storing Docker Hub authentication info.
+ */
+const dockerAuthSchema = new mongoose.Schema(
+    {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true }, // Unique per user
+        username: { type: String, required: true },
+        // NOTE: In a production app, never store raw PATs/passwords. 
+        // We simulate storing the sensitive data here as requested.
+        patOrPassword: { type: String, required: true, select: false }, 
+        authToken: { type: String, required: true, select: false } // The simulated JWT/Token
+    },
+    { timestamps: true }
+);
+
+const DockerAuth = mongoose.model("DockerAuth", dockerAuthSchema);
+
+/**
+ * @desc Schema for recording successful model deployments.
+ */
+const deploymentRecordSchema = new mongoose.Schema(
+    {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        modelName: { type: String, required: true },
+        sourcePlatform: { type: String }, // e.g., Hugging Face, Trained, Groq
+        deployedImageTag: { type: String, required: true }, // e.g., ravindraog/model-name:latest
+        endpointUrl: { type: String, default: 'http://deployed-model-service:8000/classify' }, // Mock endpoint
+        deploymentDate: { type: Date, default: Date.now },
+        // Fields for display on /mymodels
+        category: { type: String },
+        description: { type: String },
+        // A placeholder URL for the model's image/icon (e.g., Docker Hub link or Hugging Face icon)
+        imageUrl: { type: String, default: 'https://placehold.co/100x100/1E90FF/ffffff?text=AI+Model' }
+    },
+    { timestamps: true }
+);
+
+const DeploymentRecord = mongoose.model("DeploymentRecord", deploymentRecordSchema);
+
 
 // --- 3. MIDDLEWARE ---
 
@@ -450,41 +489,32 @@ app.get('/api/models/trained', protect, async (req, res) => {
     }
 });
 
-// ======== AI CHAT ROUTE (General) ========
-
 /**
- * @route   POST /api/chat
- * @desc    Proxy general chat messages to Hugging Face Inference API
+ * @route   GET /api/models/deployed
+ * @desc    Get all successfully deployed models by the user
  * @access  Private
  */
-app.post("/api/chat", protect, async (req, res) => {
-  const { message } = req.body;
-  const hfToken = process.env.HUGGING_FACE_TOKEN;
+app.get('/api/models/deployed', protect, async (req, res) => {
+    try {
+        // Fetch all deployment records for the current user
+        const deployedModels = await DeploymentRecord.find({ userId: req.user }).select('-userId -__v');
+        
+        // Map to a format consistent with other model lists 
+        const mappedDeployedModels = deployedModels.map(model => ({
+            ...model.toObject(),
+            modelName: model.modelName, // Use modelName for consistency
+            platform: 'Deployment', // Indicate platform as 'Deployment'
+            source: 'Deployment',
+            name: model.modelName,
+            isDeployed: true,
+            description: `Deployed: ${model.deployedImageTag}. Endpoint: ${model.endpointUrl}`
+        }));
 
-  if (!message) return res.status(400).json({ message: "Message is required." });
-  if (!hfToken) {
-    console.error("Hugging Face token is not configured on the server.");
-    return res.status(500).json({ message: "AI service is not configured." });
-  }
-
-  const systemPrompt = `You are a world-class AI Training Advisor named ModelNest. Your goal is to help users with their AI projects by recommending the perfect models or guiding them on training custom ones. Keep your responses concise, helpful, and friendly. You are powered by Meta Llama.`;
-  const apiUrl = `https://router.huggingface.co/v1/chat/completions`;
-  const payload = {
-      model: "meta-llama/Llama-3.1-8B-Instruct:fireworks-ai",
-      messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": message }],
-      max_tokens: 1024,
-  };
-
-  try {
-    const hfResponse = await axios.post(apiUrl, payload, {
-        headers: { 'Authorization': `Bearer ${hfToken}` }
-    });
-    const aiText = hfResponse.data.choices?.[0]?.message?.content;
-    res.json({ reply: aiText || "Sorry, I couldn't get a proper response." });
-  } catch (error) {
-    console.error("Hugging Face API Error:", error.response ? error.response.data : error.message);
-    res.status(500).json({ message: "AI service is currently unavailable." });
-  }
+        res.json(mappedDeployedModels);
+    } catch (error) {
+        console.error("Get Deployed Models Error:", error);
+        res.status(500).json({ message: "Server error while fetching deployed models." });
+    }
 });
 
 
@@ -492,20 +522,20 @@ app.post("/api/chat", protect, async (req, res) => {
 
 /**
  * @route   POST /api/deployment/generate-code
- * @desc    Uses Llama to generate Python (FastAPI), requirements.txt, and Dockerfile for deployment.
+ * @desc    Uses Llama on Cerebras to generate Python (FastAPI), requirements.txt, and Dockerfile for deployment.
  * @access  Private
  */
 app.post("/api/deployment/generate-code", protect, async (req, res) => {
     const { modelIdentifier, platform, authenticatedUsername, modelSourceDetail, isRetry, llamaDebugSuggestion } = req.body;
-    const hfToken = process.env.HUGGING_FACE_TOKEN;
+    const cerebrasToken = process.env.CEREBRAS_API_KEY; // Using Cerebras API Key
     
     if (!modelIdentifier || !authenticatedUsername) {
         return res.status(400).json({ message: "Model identifier and username are required." });
     }
 
-    if (!hfToken) {
-        console.error("Hugging Face token is not configured on the server for code generation.");
-        return res.status(500).json({ message: "AI code generation service is not configured." });
+    if (!cerebrasToken) {
+        console.error("Cerebras token is not configured on the server for code generation.");
+        return res.status(500).json({ message: "AI code generation service is not configured (Cerebras API Key missing)." });
     }
 
     let userPrompt = `Generate the following three files for the model named "${modelIdentifier}" from the source ${platform}:
@@ -529,19 +559,22 @@ DO NOT include any conversational text, explanations, or formatting outside thes
     // System instruction specifically tailored for code generation output format
     const systemPrompt = `You are an expert DevOps and MLOps engineer specializing in Llama model deployment. Your sole task is to generate EXACTLY three code blocks in this strict order: 1. app.py (inside \`\`\`python\n...\n\`\`\` block), 2. requirements.txt (inside \`\`\`text\n...\n\`\`\` block, NO version numbers, MUST include uvicorn and Pillow), and 3. Dockerfile (inside \`\`\`dockerfile\n...\n\`\`\` block). Do not add any conversational text or markdown headings.`;
 
-    const apiUrl = `https://router.huggingface.co/v1/chat/completions`;
+    // Cerebras API URL for chat completions
+    const apiUrl = `https://api.cerebras.ai/v1/chat/completions`;
+    
     const payload = {
-        model: "meta-llama/Llama-3.1-8B-Instruct:fireworks-ai", // High-capability Llama model for code tasks
+        // Using an available Llama model on the Cerebras platform
+        model: "llama-4-scout-17b-16e-instruct", 
         messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": userPrompt }],
         max_tokens: 2048, // Increased tokens for the large code output
         temperature: 0.2, // Lower temperature for more reliable code generation
     };
 
     try {
-        const hfResponse = await axios.post(apiUrl, payload, {
-            headers: { 'Authorization': `Bearer ${hfToken}` }
+        const cbResponse = await axios.post(apiUrl, payload, {
+            headers: { 'Authorization': `Bearer ${cerebrasToken}` }
         });
-        const aiText = hfResponse.data.choices?.[0]?.message?.content;
+        const aiText = cbResponse.data.choices?.[0]?.message?.content;
         
         if (!aiText) {
              return res.status(500).json({ message: "AI response was empty." });
@@ -551,9 +584,126 @@ DO NOT include any conversational text, explanations, or formatting outside thes
         res.json({ generatedCode: aiText });
         
     } catch (error) {
-        console.error("Hugging Face API Code Generation Error:", error.response ? error.response.data : error.message);
+        console.error("Cerebras API Code Generation Error:", error.response ? error.response.data : error.message);
         res.status(500).json({ message: "AI code generation service failed." });
     }
+});
+
+
+/**
+ * @route   POST /api/deployment/record
+ * @desc    Saves successful deployment details and user's Docker credentials.
+ * @access  Private
+ */
+app.post('/api/deployment/record', protect, async (req, res) => {
+    const { 
+        dockerUsername, 
+        dockerPassword, 
+        dockerAuthToken, 
+        deploymentDetails 
+    } = req.body;
+    
+    if (!dockerUsername || !dockerPassword || !dockerAuthToken || !deploymentDetails || !deploymentDetails.modelName) {
+        return res.status(400).json({ message: "Missing required deployment or credential fields." });
+    }
+
+    try {
+        // 1. Save Docker Credentials (upsert: update if exists, insert if new)
+        await DockerAuth.findOneAndUpdate(
+            { userId: req.user },
+            { 
+                username: dockerUsername, 
+                patOrPassword: dockerPassword,
+                authToken: dockerAuthToken
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+
+        // 2. Save Deployment Record
+        const record = new DeploymentRecord({
+            userId: req.user,
+            modelName: deploymentDetails.modelName,
+            sourcePlatform: deploymentDetails.sourcePlatform,
+            deployedImageTag: deploymentDetails.deployedImageTag,
+            category: deploymentDetails.category,
+            description: deploymentDetails.description,
+            imageUrl: deploymentDetails.imageUrl
+        });
+
+        await record.save();
+
+        res.status(201).json({ 
+            message: "Deployment and credentials recorded successfully.", 
+            deploymentId: record._id 
+        });
+
+    } catch (error) {
+        console.error("Save Deployment Record Error:", error);
+        res.status(500).json({ message: "Server error while saving deployment record." });
+    }
+});
+/**
+ * @route   GET /api/deployment/docker-credentials
+ * @desc    Fetch user's saved Docker credentials
+ * @access  Private
+ */
+app.get('/api/deployment/docker-credentials', protect, async (req, res) => {
+    try {
+        const dockerAuth = await DockerAuth.findOne({ userId: req.user }).select('username patOrPassword');
+        if (!dockerAuth) {
+            return res.status(404).json({ message: "No Docker credentials found for this user." });
+        }
+        res.json(dockerAuth);
+    } catch (error) {
+        console.error("Error fetching Docker credentials:", error);
+        res.status(500).json({ message: "Server error while fetching credentials." });
+    }
+});
+
+// ======== AI CHAT ROUTE (General) ========
+
+/**
+ * @route   POST /api/chat
+ * @desc    Proxy general chat messages to Cerebras API
+ * @access  Private
+ */
+app.post("/api/chat", protect, async (req, res) => {
+  const { message } = req.body;
+  const cerebrasToken = process.env.CEREBRAS_API_KEY; // Using Cerebras token
+
+  if (!message) return res.status(400).json({ message: "Message is required." });
+  if (!cerebrasToken) {
+    console.error("Cerebras token is not configured on the server.");
+    return res.status(500).json({ message: "AI service is not configured." });
+  }
+
+  const systemPrompt = `You are a world-class AI Training Advisor named ModelNest. Your goal is to help users with their AI projects by recommending the perfect models or guiding them on training custom ones. Keep your responses concise, helpful, and friendly. You are powered by Meta Llama on Cerebras hardware.`;
+  
+  // Cerebras API URL
+  const apiUrl = "https://api.cerebras.ai/v1/chat/completions";
+  
+  // Model name. The documentation shows that "llama3.1-8b" and "llama-3.3-70b" are available.
+  const model = "llama-4-scout-17b-16e-instruct";
+
+  const payload = {
+      model: model,
+      messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": message }],
+      max_tokens: 1024,
+      temperature: 0.2, // Lower temperature for more reliable code generation
+  };
+
+  try {
+    const cbResponse = await axios.post(apiUrl, payload, {
+        headers: { 'Authorization': `Bearer ${cerebrasToken}` }
+    });
+    
+    const aiText = cbResponse.data.choices?.[0]?.message?.content;
+    res.json({ reply: aiText || "Sorry, I couldn't get a proper response." });
+
+  } catch (error) {
+    console.error("Cerebras API Error:", error.response ? error.response.data : error.message);
+    res.status(500).json({ message: "AI service is currently unavailable." });
+  }
 });
 
 
