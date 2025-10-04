@@ -17,8 +17,15 @@ import FormData from "form-data";
 
 // --- SDK Import ---
 import { Cerebras } from '@cerebras/cerebras_cloud_sdk'; 
-import cros from 'cors';
-app.use (cors('https://modelnest.vercel.app'));
+import cors from 'cors';
+
+// Allow only your frontend origin
+app.use(cors({
+    origin: 'https://modelnest.vercel.app',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'], // optional, you can specify allowed methods
+    credentials: true // if you want to send cookies/auth headers
+}));
+
 // Load environment variables from .env file
 dotenv.config();
 
