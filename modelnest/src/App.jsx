@@ -4,10 +4,11 @@ import Landing from "./pages/landingpage";
 import MainPage from "./pages/homepage";  
 import Authentication from "./pages/auth";
 import Marketplace from './pages/marketplace';
-import ModelDetail from './pages/ModelDetail';
+import ModelDetail from './pages/modeldetail';
 import MyModels from './pages/mymodel';
 import DeploymentPage from './pages/deploymentpage';
 import ChatPage from './pages/chatpage';
+import { Analytics } from "@vercel/analytics/react"
 //Shared Theme and Color Configuration
 const colorScheme = {
     light: {
@@ -51,7 +52,9 @@ function App() {
     }, [theme]);
 
     return (
+        
         <BrowserRouter>
+        <Analytics />
             <Routes>
                 <Route 
                     path="/" 
@@ -138,10 +141,10 @@ function App() {
                 />
                  <Route path="/marketplace/:modelName" element={<ModelDetail theme={theme} />} />
             </Routes>
-            
         </BrowserRouter>
     );
 }
+
 
 export default App;
 

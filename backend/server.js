@@ -7,17 +7,27 @@ import jwt from "jsonwebtoken";
 import axios from "axios";
 import fs from "fs"; 
 import { pipeline } from "stream/promises"; 
-import os from "os"; 
-import { setTimeout } from 'timers/promises'; 
+import path from "path"; 
+import os from "os"; // For temporary directory
+import { setTimeout } from 'timers/promises'; // For simulating build time
+// Import child_process for running docker commands
+import { spawn } from 'child_process';
+// Import required npm packages
 import FormData from "form-data"; 
+
+// --- SDK Import ---
 import { Cerebras } from '@cerebras/cerebras_cloud_sdk'; 
 
+// Load environment variables from .env file
 dotenv.config();
 
+// Initialize Cerebras SDK Client
 const cerebrasClient = new Cerebras({
     apiKey: process.env.CEREBRAS_API_KEY,
 });
 
+// --- Global State for Stream Management (Simulating a message queue) ---
+// Stores pending deployment payloads keyed by session ID
 const deploymentPayloads = new Map();
 
 
@@ -34,6 +44,7 @@ const connectDB = async () => {
 connectDB();
 
 // --- 2. MONGOOSE SCHEMAS & MODELS ---
+// ... (User, ChatSession, ChatMessage schemas omitted for brevity) ...
 
 /**
  * @desc User Schema for MongoDB
@@ -214,6 +225,8 @@ app.use(cors('*'));
  * @param {string} modelTag - Final Docker image tag.
  */
 const streamDeploymentLogs = async (res, userId, payload, modelTag) => {
+    let streamEnded = false; // Flag to track if the stream has been closed
+
     // Set headers for Server-Sent Events (SSE)
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -221,7 +234,9 @@ const streamDeploymentLogs = async (res, userId, payload, modelTag) => {
         'Connection': 'keep-alive',
     });
 
+    // Helper to safely send events, checking if the stream is already closed
     const sendEvent = (event, data) => {
+        if (streamEnded || res.writableEnded) return; // Prevent writing to a closed stream
         if (typeof data !== 'string') {
             data = JSON.stringify(data);
         }
@@ -229,8 +244,17 @@ const streamDeploymentLogs = async (res, userId, payload, modelTag) => {
         res.write(`data: ${data}\n\n`);
     };
 
+    // Helper to safely end the stream
+    const endStream = (finalMessage) => {
+        if (!streamEnded && !res.writableEnded) {
+            sendEvent('end', finalMessage || 'Deployment process finished.');
+            res.end();
+            streamEnded = true;
+        }
+    };
+
+
     const { modelIdentifier, dockerUsername, dockerPassword, dockerfile, pythonCode, requirementsTxt } = payload;
-    let isSuccess = true;
     let tempDir;
 
     try {
@@ -241,74 +265,39 @@ const streamDeploymentLogs = async (res, userId, payload, modelTag) => {
         tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deployment-'));
         sendEvent('log', { message: `[FS] Created temporary directory: ${tempDir}`, isError: false });
 
-        // Write Dockerfile
-        const dockerfilePath = path.join(tempDir, 'Dockerfile');
-        fs.writeFileSync(dockerfilePath, dockerfile);
-        sendEvent('log', { message: `[FS] Wrote Dockerfile to ${dockerfilePath}`, isError: false });
-
-        // Write app.py
-        const appPyPath = path.join(tempDir, 'app.py');
-        fs.writeFileSync(appPyPath, pythonCode);
-        sendEvent('log', { message: `[FS] Wrote app.py to ${appPyPath}`, isError: false });
-
-        // Write requirements.txt
-        const requirementsPath = path.join(tempDir, 'requirements.txt');
-        fs.writeFileSync(requirementsPath, requirementsTxt);
-        sendEvent('log', { message: `[FS] Wrote requirements.txt to ${requirementsPath}`, isError: false });
-
+        // Write Dockerfile, app.py, and requirements.txt
+        fs.writeFileSync(path.join(tempDir, 'Dockerfile'), dockerfile);
+        fs.writeFileSync(path.join(tempDir, 'app.py'), pythonCode);
+        fs.writeFileSync(path.join(tempDir, 'requirements.txt'), requirementsTxt);
+        sendEvent('log', { message: `[FS] Wrote deployment files to temp directory.`, isError: false });
+        
         // --- Phase 2: Docker Login ---
         sendEvent('status', 'authenticating');
         sendEvent('log', { message: `[DOCKER] Attempting login for user ${dockerUsername}.`, isError: false });
 
         const loginProcess = spawn('docker', ['login', '--username', dockerUsername, '--password-stdin']);
-
         loginProcess.stdin.write(dockerPassword);
         loginProcess.stdin.end();
 
-        loginProcess.stdout.on('data', (data) => {
-            sendEvent('log', { message: data.toString().trim(), isError: false });
-        });
+        loginProcess.stdout.on('data', (data) => sendEvent('log', { message: data.toString().trim(), isError: false }));
+        loginProcess.stderr.on('data', (data) => sendEvent('log', { message: data.toString().trim(), isError: true }));
 
-        loginProcess.stderr.on('data', (data) => {
-            sendEvent('log', { message: data.toString().trim(), isError: true });
+        await new Promise((resolve, reject) => {
+            loginProcess.on('close', (code) => code !== 0 ? reject(new Error(`Docker login failed with exit code ${code}`)) : resolve(code));
         });
-
-        const loginExitCode = await new Promise((resolve, reject) => {
-            loginProcess.on('close', (code) => {
-                if (code !== 0) {
-                    reject(new Error(`Docker login failed with exit code ${code}`));
-                } else {
-                    resolve(code);
-                }
-            });
-        });
-
         sendEvent('log', { message: `[DOCKER LOGIN] Successful login.`, isError: false });
 
         // --- Phase 3: Docker Build ---
         sendEvent('status', 'building');
-        sendEvent('log', { message: `[DOCKER BUILD] Building image: ${modelTag} from context ${tempDir}`, isError: false });
+        sendEvent('log', { message: `[DOCKER BUILD] Building image: ${modelTag}`, isError: false });
 
         const buildProcess = spawn('docker', ['build', '-t', modelTag, tempDir]);
-
-        buildProcess.stdout.on('data', (data) => {
-            sendEvent('log', { message: data.toString().trim(), isError: false });
+        buildProcess.stdout.on('data', (data) => sendEvent('log', { message: data.toString().trim(), isError: false }));
+        buildProcess.stderr.on('data', (data) => sendEvent('log', { message: data.toString().trim(), isError: true }));
+        
+        await new Promise((resolve, reject) => {
+            buildProcess.on('close', (code) => code !== 0 ? reject(new Error(`Docker build failed with exit code ${code}`)) : resolve(code));
         });
-
-        buildProcess.stderr.on('data', (data) => {
-            sendEvent('log', { message: data.toString().trim(), isError: true });
-        });
-
-        const buildExitCode = await new Promise((resolve, reject) => {
-            buildProcess.on('close', (code) => {
-                if (code !== 0) {
-                    reject(new Error(`Docker build failed with exit code ${code}`));
-                } else {
-                    resolve(code);
-                }
-            });
-        });
-
         sendEvent('log', { message: `[DOCKER BUILD] Successfully built image: ${modelTag}`, isError: false });
 
         // --- Phase 4: Docker Push ---
@@ -316,32 +305,16 @@ const streamDeploymentLogs = async (res, userId, payload, modelTag) => {
         sendEvent('log', { message: `[DOCKER PUSH] Pushing image: ${modelTag} to Docker Hub.`, isError: false });
 
         const pushProcess = spawn('docker', ['push', modelTag]);
+        pushProcess.stdout.on('data', (data) => sendEvent('log', { message: data.toString().trim(), isError: false }));
+        pushProcess.stderr.on('data', (data) => sendEvent('log', { message: data.toString().trim(), isError: true }));
 
-        pushProcess.stdout.on('data', (data) => {
-            sendEvent('log', { message: data.toString().trim(), isError: false });
+        await new Promise((resolve, reject) => {
+            pushProcess.on('close', (code) => code !== 0 ? reject(new Error(`Docker push failed with exit code ${code}`)) : resolve(code));
         });
-
-        pushProcess.stderr.on('data', (data) => {
-            sendEvent('log', { message: data.toString().trim(), isError: true });
-        });
-
-        const pushExitCode = await new Promise((resolve, reject) => {
-            pushProcess.on('close', (code) => {
-                if (code !== 0) {
-                    reject(new Error(`Docker push failed with exit code ${code}`));
-                } else {
-                    resolve(code);
-                }
-            });
-        });
-
         sendEvent('log', { message: `[DOCKER PUSH] Push completed. Image available at ${modelTag}`, isError: false });
-
-        // --- Phase 5: Deployment Recording ---
-        sendEvent('status', 'deploying');
         
+        // --- Phase 5: Record Deployment ---
         const deploymentDetails = payload.deploymentDetails;
-        
         const record = new DeploymentRecord({
             userId: userId,
             modelName: deploymentDetails.modelName,
@@ -351,7 +324,6 @@ const streamDeploymentLogs = async (res, userId, payload, modelTag) => {
             description: deploymentDetails.description,
             imageUrl: deploymentDetails.imageUrl
         });
-
         await record.save();
         sendEvent('log', { message: `[API] Deployment record saved to MongoDB.`, isError: false });
 
@@ -360,23 +332,20 @@ const streamDeploymentLogs = async (res, userId, payload, modelTag) => {
         sendEvent('status', 'complete');
         
     } catch (error) {
-        isSuccess = false;
         sendEvent('log', { message: `[FATAL ERROR] Deployment failed: ${error.message}`, isError: true });
         sendEvent('status', 'failed');
         console.error("Stream Deployment Error:", error);
     } finally {
-        // Clean up temporary directory
+        // --- Final Cleanup ---
         if (tempDir) {
             fs.rmSync(tempDir, { recursive: true, force: true });
-            sendEvent('log', { message: `[FS] Cleaned up temporary directory: ${tempDir}`, isError: false });
+            sendEvent('log', { message: `[FS] Cleaned up temporary directory.`, isError: false });
         }
-        // Clean up the temporary payload store
         if (payload.sessionId) {
             deploymentPayloads.delete(payload.sessionId);
         }
-        // Must close the connection at the end
-        sendEvent('end', 'Deployment process finished.');
-        res.end();
+        // Safely end the stream here, and only here.
+        endStream();
     }
 };
 
@@ -725,7 +694,7 @@ CRITICAL: The output MUST be ONLY one Python code block enclosed in \`\`\`python
 
 
     res.status(200).json({ 
-        message: "Kaggle Notebook script successfully generated.", 
+        message: "Kagle Notebook script successfully generated.", 
         ai_script: generatedScript,
         fileName: fileName,
         taskDescription: taskDescription,
@@ -827,7 +796,7 @@ app.put('/api/profile', protect, async (req, res) => {
 
 const fetchHuggingFaceModels = async () => {
     try {
-      const response = await axios.get("[https://huggingface.co/api/models?limit=50](https://huggingface.co/api/models?limit=50)");
+      const response = await axios.get("[https://huggingface.co/api/models](https://huggingface.co/api/models)");
       return response.data.map(model => ({
         ...generateMockMetrics(model.modelId),
         platform: "Hugging Face",
@@ -864,26 +833,7 @@ const fetchReplicateModels = async () => {
     }
 };
 
-const fetchOpenAIModels = async () => {
-    if (!process.env.OPENAI_API_KEY) return [];
-    try {
-        const response = await axios.get("[https://api.openai.com/v1/models](https://api.openai.com/v1/models)", {
-            headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
-        });
-        return response.data.data.map(model => ({
-            ...generateMockMetrics(model.id),
-            platform: "OpenAI",
-            name: model.id,
-            description: `Official model from OpenAI.`,
-            url: `https://platform.openai.com/docs/models/${model.id}`,
-            tags: ['LLM', 'GPT'],
-            category: 'Generation',
-        }));
-    } catch (err) {
-        console.warn("OpenAI fetch failed:", err.message);
-        return [];
-    }
-};
+
 
 const getStaticModels = () => [
     ...[{ name: "MobileNetV3", category: "Vision", tags: ['CNN', 'Vision'] }, { name: "Universal Sentence Encoder", category: "NLP", tags: ['Embeddings', 'NLP'] }].map(m => ({ ...generateMockMetrics(m.name), ...m, platform: "TensorFlow Hub", description: `A popular ${m.category} model.` })),
@@ -904,7 +854,6 @@ app.get('/api/models/marketplace', async (req, res) => {
     const results = await Promise.all([
       fetchHuggingFaceModels(),
       fetchReplicateModels(),
-      fetchOpenAIModels(),
       getStaticModels(),
     ]);
 
@@ -937,7 +886,6 @@ app.get(/^\/api\/models\/marketplace\/(.*)$/, async (req, res) => {
         const results = await Promise.all([
             fetchHuggingFaceModels(),
             fetchReplicateModels(),
-            fetchOpenAIModels(),
             getStaticModels(),
         ]);
         const allModels = results.flat();
@@ -1260,5 +1208,5 @@ app.post("/api/chat", protect, async (req, res) => {
 
 
 // --- 7. SERVER INITIALIZATION ---
-const PORT = process.env.PORT || 8080; // Changed port to 8080
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
