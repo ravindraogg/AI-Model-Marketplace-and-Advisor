@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Heart, Upload, Code, Zap, Layers, GitPullRequest, Sun, Moon, Home, Settings, LogOut, ExternalLink, Package, Loader2, ChevronLeft, Save } from 'lucide-react';
+import { Heart, Upload, Code, Zap, Layers, GitPullRequest, Sun, Moon, Home, Settings, LogOut, ExternalLink, Package, Loader2, ChevronLeft, Save, Cloud, CheckCircle, Key } from 'lucide-react'; // Added Key icon
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vs, atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 const API_BASE_URL = import.meta.env.VITE_BASE_URL;
-
 
 const colorScheme = {
   dark: {
@@ -170,10 +169,12 @@ export default function MyModels({ theme, toggleTheme }) {
     const navigate = useNavigate();
     const [favorites, setFavorites] = useState([]);
     const [trainedModels, setTrainedModels] = useState([]);
+    const [deployedModels, setDeployedModels] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showTrainedModal, setShowTrainedModal] = useState(false);
-    // NEW: State for user profile data
     const [profile, setProfile] = useState(null); 
+    const [dockerCredentials, setDockerCredentials] = useState(null); // NEW: State for docker credentials
+    const [showCredentials, setShowCredentials] = useState(false); // NEW: State to toggle credentials visibility
 
     const currentTheme = colorScheme[theme || 'dark'];
     const isDark = theme === 'dark';
@@ -182,7 +183,6 @@ export default function MyModels({ theme, toggleTheme }) {
         return name ? name.charAt(0).toUpperCase() : 'U';
     };
 
-    // NEW: Fetch profile from session storage
     useEffect(() => {
         try {
             const storedProfile = sessionStorage.getItem('userProfile');
@@ -200,7 +200,6 @@ export default function MyModels({ theme, toggleTheme }) {
         const token = localStorage.getItem('authToken');
         if (!token) {
             setLoading(false);
-            // In a real app, you would redirect to signin
             return; 
         }
 
@@ -222,12 +221,31 @@ export default function MyModels({ theme, toggleTheme }) {
                 console.error("Failed to fetch trained models:", trainedResponse.statusText);
                 setTrainedModels([]);
             }
+
+            // 3. Fetch Deployed Models
+            const deployedResponse = await fetch(`${API_BASE_URL}/api/models/deployed`, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (deployedResponse.ok) {
+                setDeployedModels(await deployedResponse.json());
+            } else {
+                console.error("Failed to fetch deployed models:", deployedResponse.statusText);
+                setDeployedModels([]);
+            }
+
+            // 4. NEW: Check if Docker credentials exist
+            const credsResponse = await fetch(`${API_BASE_URL}/api/deployment/docker-credentials`, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (credsResponse.ok) {
+                const credsData = await credsResponse.json();
+                setDockerCredentials(credsData);
+            } else {
+                setDockerCredentials(null);
+            }
+
         } catch (error) {
             console.error("Network error fetching models:", error);
         } finally {
             setLoading(false);
         }
-    }, []); // Removed API_BASE_URL from dependencies since it's static
+    }, []);
 
     const handleSaveTrainedModel = async (formData) => {
         const token = localStorage.getItem('authToken');
@@ -239,7 +257,7 @@ export default function MyModels({ theme, toggleTheme }) {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`
             },
-            body: JSON.stringify({...formData, status: "Deployed?" }) // Added status field
+            body: JSON.stringify({...formData, status: "Deployed?" })
         });
 
         if (!response.ok) {
@@ -247,8 +265,29 @@ export default function MyModels({ theme, toggleTheme }) {
             throw new Error(errorData.message || 'Failed to save trained model.');
         }
 
-        // FIX: The save was successful, now refresh the list
         await fetchModels();
+    };
+
+    const handleFetchCredentials = async () => {
+        const token = localStorage.getItem('authToken');
+        if (!token) return;
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/deployment/docker-credentials`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                const credsData = await response.json();
+                setDockerCredentials(credsData);
+                setShowCredentials(true);
+            } else {
+                console.error("Failed to fetch credentials.");
+                alert("Failed to fetch Docker credentials. Have you deployed a model before?");
+            }
+        } catch (error) {
+            console.error("Error fetching credentials:", error);
+            alert("Network error while fetching credentials.");
+        }
     };
 
 
@@ -355,7 +394,7 @@ export default function MyModels({ theme, toggleTheme }) {
                 </div>
 
                 {/* Trained Models Section */}
-                <div className={`p-8 ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-3xl transition-all duration-300`}>
+                <div className={`mb-10 p-8 ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-3xl transition-all duration-300`}>
                     <div className="flex items-center justify-between mb-6">
                         <h2 className={`text-2xl font-bold ${currentTheme.textPrimary} flex items-center space-x-3`} style={{ fontFamily: 'Orbitron, sans-serif' }}>
                             <Upload className="w-6 h-6 text-[#00FFE0]" />
@@ -415,6 +454,79 @@ export default function MyModels({ theme, toggleTheme }) {
                     </div>
                 </div>
 
+                {/* NEW: Deployed Models Section */}
+                <div className={`p-8 ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-3xl transition-all duration-300`}>
+                    <div className="flex items-center justify-between mb-6">
+                        <h2 className={`text-2xl font-bold ${currentTheme.textPrimary} flex items-center space-x-3`} style={{ fontFamily: 'Orbitron, sans-serif' }}>
+                            <Cloud className="w-6 h-6 text-[#1E90FF]" />
+                            <span>Deployed Models ({deployedModels.length})</span>
+                        </h2>
+                        {dockerCredentials && (
+                            <button
+                                onClick={() => setShowCredentials(!showCredentials)}
+                                className={`px-4 py-2 text-sm rounded-full font-semibold transition-all ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} hover:scale-105 hover:bg-gradient-to-r hover:from-[#9B59B6]/20 hover:to-[#00FFE0]/20`}
+                            >
+                                <span className="flex items-center space-x-2">
+                                    <Key className="w-4 h-4 text-[#9B59B6]" />
+                                    <span>{showCredentials ? 'Hide' : 'Show'} Docker Credentials</span>
+                                </span>
+                            </button>
+                        )}
+                    </div>
+                    
+                    {showCredentials && dockerCredentials && (
+                        <div className={`p-4 mb-6 rounded-xl ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder}`}>
+                            <p className={`text-sm font-semibold ${currentTheme.textPrimary} mb-2`}>Your Docker Hub Credentials:</p>
+                            <div className="space-y-2 text-xs">
+                                <p className={currentTheme.textSecondary}>
+                                    <span className="font-mono text-white">Username:</span> {dockerCredentials.username}
+                                </p>
+                                <p className={currentTheme.textSecondary}>
+                                    <span className="font-mono text-white">PAT/Password:</span> {dockerCredentials.patOrPassword}
+                                </p>
+                                <p className={`text-red-400 font-semibold mt-2`}>
+                                    Note: This information is sensitive and should be handled with care.
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="space-y-6">
+                        {deployedModels.length > 0 ? (
+                            deployedModels.map((deployed, index) => (
+                                <div key={index} className={`p-6 ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-2xl`}>
+                                    <div className="flex items-start justify-between mb-4">
+                                        <div>
+                                            <h3 className={`font-extrabold text-xl ${currentTheme.textPrimary} mb-1`}>{deployed.modelName}</h3>
+                                            <div className="flex flex-wrap items-center space-x-4 text-sm">
+                                                <span className={`text-[#00FFE0] font-semibold flex items-center space-x-1`}>
+                                                    <Package className="w-4 h-4" />
+                                                    <span>Source: {deployed.sourcePlatform || 'N/A'}</span>
+                                                </span>
+                                                <span className={`text-[#9B59B6] font-semibold flex items-center space-x-1`}>
+                                                    <CheckCircle className="w-4 h-4" />
+                                                    <span>Status: Live</span>
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <span className="px-3 py-1 bg-green-500/30 text-green-300 text-xs font-semibold rounded-full border border-green-500">
+                                            Active
+                                        </span>
+                                    </div>
+                                    <p className={`text-base ${currentTheme.textSecondary} mb-4`}>{deployed.description}</p>
+                                    <div className={`flex items-center space-x-2 text-sm ${currentTheme.textSecondary}`}>
+                                        <span className="flex items-center space-x-1 text-[#1E90FF]">
+                                            <Layers className="w-4 h-4" />
+                                            <span>Docker Image Tag: {deployed.deployedImageTag}</span>
+                                        </span>
+                                    </div>
+                                </div>
+                            ))
+                        ) : (
+                            <p className={`${currentTheme.textSecondary} text-center p-8`}>You haven't deployed any models yet. Visit the Deployments section to get started!</p>
+                        )}
+                    </div>
+                </div>
             </div>
             
             <style jsx="true">{`

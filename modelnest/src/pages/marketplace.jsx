@@ -626,8 +626,8 @@ export default function Marketplace({ theme, currentTheme, toggleTheme }) {
               
               {[
                 { name: 'Home', url: '/mainpage', icon: Home },
-                { name: 'My Models', url: '#', icon: Zap }, 
-                { name: 'Deployments', url: '#', icon: Box }
+                { name: 'My Models', url: '/mymodel', icon: Zap }, 
+                { name: 'Deployments', url: '/deploy', icon: Box }
               ].map((item) => (
                 <a
                   key={item.name}

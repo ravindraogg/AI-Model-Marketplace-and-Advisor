@@ -184,6 +184,10 @@ export default function Homepage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   
+  // NEW: State for model counts
+  const [activeModelCount, setActiveModelCount] = useState(0);
+  const [deploymentCount, setDeploymentCount] = useState(0);
+
   // State for chat messages and loading
   const [messages, setMessages] = useState([
     { type: 'assistant', text: 'Welcome to ModelNest! Tell me about your AI project, and I\'ll recommend the perfect model or help you train a custom one.' }
@@ -241,7 +245,31 @@ export default function Homepage() {
       setLoading(false);
     }
   }, []);
-  
+
+  // NEW: Function to fetch all counts
+  const fetchCounts = useCallback(async () => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    try {
+        const [favsRes, trainedRes, deployedRes] = await Promise.all([
+            fetch(`${API_BASE_URL}/api/models/favorites`, { headers: { 'Authorization': `Bearer ${token}` } }),
+            fetch(`${API_BASE_URL}/api/models/trained`, { headers: { 'Authorization': `Bearer ${token}` } }),
+            fetch(`${API_BASE_URL}/api/models/deployed`, { headers: { 'Authorization': `Bearer ${token}` } })
+        ]);
+
+        const favs = await favsRes.json();
+        const trained = await trainedRes.json();
+        const deployed = await deployedRes.json();
+
+        setActiveModelCount(favs.length + trained.length);
+        setDeploymentCount(deployed.length);
+
+    } catch (error) {
+        console.error("Failed to fetch model counts:", error);
+    }
+  }, []);
+
   // --- New: Fetch Popular Models from Marketplace API ---
   const fetchPopularModels = useCallback(async () => {
     try {
@@ -352,7 +380,8 @@ export default function Homepage() {
   useEffect(() => {
     fetchProfile();
     fetchPopularModels(); // Fetch models when component mounts
-  }, [fetchProfile, fetchPopularModels]);
+    fetchCounts(); // NEW: Fetch model counts on mount
+  }, [fetchProfile, fetchPopularModels, fetchCounts]);
 
   // Theme and mouse tracking
   useEffect(() => {
@@ -599,15 +628,16 @@ export default function Homepage() {
               </h1>
               <p className={`text-lg ${currentTheme.textSecondary}`}>What AI solution will you build today?</p>
             </div>
+            {/* NEW: Use fetched counts */}
             <div className={`hidden md:flex items-center space-x-6 px-8 py-4 ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-2xl`}>
               <div className="text-center">
                 <p className={`text-sm ${currentTheme.textSecondary}`}>Active Models</p>
-                <p className={`text-2xl font-bold bg-gradient-to-r from-[#00FFE0] to-[#1E90FF] bg-clip-text text-transparent`}>12</p>
+                <p className={`text-2xl font-bold bg-gradient-to-r from-[#00FFE0] to-[#1E90FF] bg-clip-text text-transparent`}>{activeModelCount}</p>
               </div>
               <div className="h-10 w-px bg-[#9B59B6]/50"></div>
               <div className="text-center">
                 <p className={`text-sm ${currentTheme.textSecondary}`}>Deployments</p>
-                <p className={`text-2xl font-bold bg-gradient-to-r from-[#9B59B6] to-[#00FFE0] bg-clip-text text-transparent`}>8</p>
+                <p className={`text-2xl font-bold bg-gradient-to-r from-[#9B59B6] to-[#00FFE0] bg-clip-text text-transparent`}>{deploymentCount}</p>
               </div>
             </div>
           </div>
@@ -751,19 +781,8 @@ export default function Homepage() {
                 </button>
               </div>
 
-              <div className="relative">
-                <Search className={`absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-[#00FFE0]`} />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search models..."
-                  className={`w-full ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-full pl-12 pr-12 py-3 ${currentTheme.textPrimary} focus:outline-none focus:ring-2 focus:ring-[#00FFE0] transition-all duration-300 ${isDark ? 'focus:shadow-[0_0_15px_rgba(0,255,224,0.5)]' : 'focus:shadow-[0_0_15px_rgba(30,144,255,0.5)]'}`}
-                />
-                <button className={`absolute right-2 top-1/2 transform -translate-y-1/2 p-2 ${currentTheme.cardBg} border ${currentTheme.cardBorder} hover:border-[#9B59B6] rounded-full transition-all hover:scale-105`}>
-                  <Filter className={`w-4 h-4 text-[#9B59B6]`} />
-                </button>
-              </div>
+              {/* REMOVED: Search and Filter elements */}
+
             </div>
 
             <div className={`flex-1 overflow-y-auto p-6 ${isDark ? 'dark-scrollbar' : 'light-scrollbar'}`}>
