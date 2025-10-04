@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, Sun, Moon, Brain, MessageSquare, Send, Upload, Edit2, Trash2, X, AlertTriangle, Loader2, Save, FileText, User as UserIcon } from 'lucide-react';
+import { ChevronLeft, Sun, Moon, Brain, MessageSquare, Send, Upload, Edit2, Trash2, X, AlertTriangle, Loader2, Save, FileText, User as UserIcon, Clipboard, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 // FIX: Using a fallback for import.meta.env to resolve compilation warnings
@@ -28,6 +28,90 @@ const colorScheme = {
     navBg: 'bg-white/80',
     sidebarBg: 'bg-white/90 backdrop-blur-lg'
   },
+};
+
+// --- Helper function to copy text to clipboard (reliable in iFrames) ---
+const copyToClipboard = (text) => {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    document.body.appendChild(textarea);
+    textarea.select();
+    
+    try {
+        document.execCommand('copy');
+    } catch (err) {
+        console.error('Failed to copy text: ', err);
+    }
+    
+    document.body.removeChild(textarea);
+};
+
+// --- Custom Code Renderer Component ---
+const CodeBlock = ({ node, inline, className, children, ...props }) => {
+    const match = /language-(\w+)/.exec(className || '');
+    const codeText = String(children).replace(/\n$/, '');
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = () => {
+        copyToClipboard(codeText);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+
+    if (inline) {
+        return <code className={className} {...props}>{children}</code>;
+    }
+
+    return (
+        <div className="relative my-4 rounded-xl overflow-hidden shadow-lg border border-[#00FFE0]/30 bg-black/50">
+            <div className="flex justify-between items-center px-4 py-2 bg-black/80 border-b border-[#00FFE0]/30 text-xs font-mono text-[#00FFE0]">
+                <span>{match ? match[1].toUpperCase() : 'CODE'}</span>
+                <button
+                    onClick={handleCopy}
+                    className={`flex items-center space-x-1 p-1.5 rounded-lg transition-colors text-white/80 ${copied ? 'bg-green-600' : 'hover:bg-[#00FFE0]/30 hover:text-[#00FFE0]'}`}
+                >
+                    {copied ? (
+                        <>
+                            <Check className="w-3 h-3" />
+                            <span>Copied!</span>
+                        </>
+                    ) : (
+                        <>
+                            <Clipboard className="w-3 h-3" />
+                            <span>Copy Code</span>
+                        </>
+                    )}
+                </button>
+            </div>
+            <pre className="p-4 overflow-x-auto text-sm" style={{ backgroundColor: 'transparent' }}>
+                <code className={className} {...props}>
+                    {children}
+                </code>
+            </pre>
+        </div>
+    );
+};
+
+// Define ReactMarkdown components map
+const markdownComponents = {
+    code: CodeBlock,
+    // Blockquote custom styling for the Note:
+    blockquote: ({ node, ...props }) => (
+        <div className="mt-2 mb-4 p-3 rounded-lg text-sm font-semibold text-white/90 bg-gradient-to-r from-[#00FFE0]/20 to-[#1E90FF]/20 border border-[#00FFE0]/50">
+            <p className="mt-1 text-xs text-white/70" {...props} />
+        </div>
+    ),
+    p: ({ node, ...props }) => {
+        // Find if this paragraph contains the specific Note: text to apply custom styling
+        if (props.children && typeof props.children[0] === 'string' && props.children[0].startsWith('Note: AI Cloud Training Agent')) {
+            return (
+                <div className="mt-2 mb-4 p-3 rounded-lg text-sm font-semibold text-white/90 bg-gradient-to-r from-[#00FFE0]/20 to-[#1E90FF]/20 border border-[#00FFE0]/50">
+                    {props.children}
+                </div>
+            );
+        }
+        return <p {...props} />;
+    }
 };
 
 // --- Custom Modal Component (omitted for brevity) ---
@@ -233,6 +317,7 @@ export default function ChatPage({ theme, toggleTheme }) {
     }, [fetchDailyLimit]);
 
     // --- INITIAL MESSAGE HANDLER ---
+    // NOTE: This effect is re-triggered when `handleSendMessage` is created, which is intentional.
     useEffect(() => {
         // Only run if we are on the /chatnew route (no chatId in URL) AND haven't attempted yet
         if (!chatId && !isInitialSendAttempted.current) {
@@ -243,12 +328,10 @@ export default function ChatPage({ theme, toggleTheme }) {
                 sessionStorage.removeItem('initialChatMessage');
                 
                 // Use a slight delay to ensure the component is fully rendered before state updates/sends are triggered
-                setTimeout(() => {
-                    handleSendMessage(initialMessage);
-                }, 100); 
+                // The actual send relies on handleSendMessage stability, handled below.
             }
         }
-    }, [chatId]); // No dependencies needed other than chatId if handleSendMessage is stable
+    }, [chatId]);
 
     // --- URL SYNC EFFECT ---
     // Update internal state when URL parameter changes (user navigates via browser or link)
@@ -364,10 +447,6 @@ export default function ChatPage({ theme, toggleTheme }) {
 
 
     // --- API ACTIONS (Memoized) ---
-    // Note: handleSendMessage needs saveMessage, startNewChat, fetchDailyLimit, setMessages, etc. 
-    // To make handleSendMessage callable in useEffect (for initial message send), 
-    // we need to make sure all its dependencies are stable.
-
     const saveMessage = useCallback(async (chatId, role, text, newTitle = null) => {
         const token = localStorage.getItem('authToken');
         
@@ -479,7 +558,11 @@ export default function ChatPage({ theme, toggleTheme }) {
         }
         
         setIsThinking(true);
-        setChatInput('');
+        // Only clear input if the message came directly from the input box
+        if (userMessage === chatInput) {
+            setChatInput('');
+        }
+        
         const token = localStorage.getItem('authToken');
         
         try {
@@ -508,24 +591,18 @@ export default function ChatPage({ theme, toggleTheme }) {
         }
     }, [chatInput, currentChatId, isThinking, saveMessage, startNewChat]); // Dependency array updated
 
-    // Re-trigger useEffect for initial message after handleSendMessage is stable
+    // Auto-Send effect for initial message loaded from Homepage
     useEffect(() => {
-        // Only run if we are on the /chatnew route (no chatId in URL) AND haven't attempted yet
-        if (!chatId && !isInitialSendAttempted.current) {
-            const initialMessage = sessionStorage.getItem('initialChatMessage');
-            
-            if (initialMessage) {
-                isInitialSendAttempted.current = true; // Mark as attempted
-                sessionStorage.removeItem('initialChatMessage');
-                
-                // Use the memoized handleSendMessage function
-                // setChatInput(initialMessage); // Cosmetic, not strictly needed
-                setTimeout(() => {
-                    handleSendMessage(initialMessage);
-                }, 100); 
-            }
+        // Only trigger auto-send if the message is already set in the input (which happens
+        // from the initial load check logic) and we are ready to send.
+        if (!chatId && !isInitialSendAttempted.current && chatInput && !isThinking) {
+             isInitialSendAttempted.current = true; // Mark as attempted
+             // Use a slight delay to ensure all state updates and rendering are complete
+             setTimeout(() => {
+                 handleSendMessage(chatInput);
+             }, 100); 
         }
-    }, [chatId, handleSendMessage]);
+    }, [chatId, handleSendMessage, chatInput, isThinking]);
 
 
     // --- SIDEBAR ACTIONS ---
@@ -684,7 +761,6 @@ export default function ChatPage({ theme, toggleTheme }) {
             const aiScript = result.ai_script || "Script generation failed. Please try a different prompt.";
             
             // Construct the AI response message with guidance and the code block
-            // NOTE: Using inline Tailwind/styles that ReactMarkdown supports for the custom note
             const aiText = `✅ **Training Script Generated!**
 
 The Llama-powered MLOps Advisor has analyzed your request and generated a full PyTorch training script tailored for a Kaggle Notebook environment.
@@ -1010,7 +1086,7 @@ ${aiScript}
                                         </div>
                                     )}
                                     <div className={`prose max-w-none ${msg.role === 'user' ? 'prose-invert' : isDark ? 'prose-invert' : ''}`}>
-                                        <ReactMarkdown> 
+                                        <ReactMarkdown components={markdownComponents}>
                                             {msg.text}
                                         </ReactMarkdown>
                                     </div>
@@ -1132,6 +1208,7 @@ ${aiScript}
                     font-style: italic;
                 }
                 .prose code {
+                    /* Inline code style */
                     background: rgba(0, 255, 224, 0.1);
                     padding: 0.2em 0.4em;
                     border-radius: 0.25em;
@@ -1141,18 +1218,21 @@ ${aiScript}
                     white-space: pre-wrap;
                 }
                 .prose pre {
-                    background: rgba(0, 0, 0, 0.3);
-                    padding: 1em;
-                    border-radius: 0.5em;
+                    /* Block code is handled by CodeBlock component */
+                    background: none;
+                    padding: 0;
+                    border-radius: 0;
                     overflow-x: auto;
-                    margin: 1em 0;
+                    margin: 0;
                     white-space: pre;
                 }
                 .prose pre code {
+                    /* Resetting style inside pre block which is now handled by CodeBlock */
                     background: none;
                     padding: 0;
                     color: inherit;
                     white-space: pre;
+                    font-size: 1em; /* Ensure font size is consistent */
                 }
                 .prose a {
                     color: #1E90FF;
@@ -1197,9 +1277,7 @@ ${aiScript}
                     background: rgba(255, 255, 255, 0.1);
                     color: #00FFE0;
                 }
-                .prose-invert pre {
-                    background: rgba(255, 255, 255, 0.1);
-                }
+                /* Note: Pre code is styled by CodeBlock component classes */
 
                 /* Custom Scrollbar */
                 .custom-scrollbar-dark::-webkit-scrollbar {
@@ -1209,11 +1287,11 @@ ${aiScript}
                     background: transparent;
                 }
                 .custom-scrollbar-dark::-webkit-scrollbar-thumb {
-                    background: rgba(0, 255, 224, 0.3);
+                    background: #00FFE0; /* Theme-oriented: Cyan */
                     border-radius: 4px;
                 }
                 .custom-scrollbar-dark::-webkit-scrollbar-thumb:hover {
-                    background: rgba(0, 255, 224, 0.5);
+                    background: #1E90FF; /* Hover: Blue */
                 }
                 
                 .custom-scrollbar-light::-webkit-scrollbar {
@@ -1223,11 +1301,11 @@ ${aiScript}
                     background: transparent;
                 }
                 .custom-scrollbar-light::-webkit-scrollbar-thumb {
-                    background: rgba(30, 144, 255, 0.3);
+                    background: #1E90FF; /* Theme-oriented: Blue */
                     border-radius: 4px;
                 }
                 .custom-scrollbar-light::-webkit-scrollbar-thumb:hover {
-                    background: rgba(30, 144, 255, 0.5);
+                    background: #00FFE0; /* Hover: Cyan */
                 }
             `}</style>
         </div>

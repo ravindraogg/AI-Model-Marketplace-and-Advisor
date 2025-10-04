@@ -62,27 +62,7 @@ const extractCode = (response) => {
     };
 };
 
-const mockBuildLogs = [
-    "Step 1/10 : FROM python:3.9-slim-buster",
-    "Step 2/10 : WORKDIR /app",
-    "Step 3/10 : COPY requirements.txt .",
-    "Step 4/10 : RUN pip install --no-cache-dir -r requirements.txt",
-    "ERROR: Could not find a version that satisfies the requirement missing_dep (from versions: none)",
-    "ERROR: No matching distribution found for missing_dep",
-    "Build failed: Exit code 1"
-];
-
-const mockSuccessLogs = [
-    "Step 1/10 : FROM python:3.9-slim-buster",
-    "Step 2/10 : WORKDIR /app",
-    "Step 3/10 : COPY requirements.txt .",
-    "Step 4/10 : RUN pip install --no-cache-dir -r requirements.txt",
-    "Successfully installed fastapi uvicorn transformers torch Pillow requests",
-    "Step 5/10 : COPY app.py .",
-    "Step 6/10 : EXPOSE 8000",
-    "Step 7/10 : CMD ['uvicorn', 'app:app', '--host', '0.0.0.0']",
-    "Build complete: Exit code 0"
-];
+// Removed mockBuildLogs and mockSuccessLogs
 
 
 // --- STANDALONE PANEL COMPONENTS ---
@@ -95,8 +75,12 @@ const DeploymentCompletePanel = ({ selectedModel, dockerUsername }) => {
     const currentTheme = colorScheme[theme];
 
     useEffect(() => {
+        // Clear all session storage deployment items on final step
         sessionStorage.removeItem('dockerAuthToken');
         sessionStorage.removeItem('dockerUsername');
+        sessionStorage.removeItem('generatedCode');
+        sessionStorage.removeItem('selectedModel');
+        sessionStorage.removeItem('dockerPassword'); // NEW: Clear stored password
     }, []);
     
     return (
@@ -137,20 +121,44 @@ const DeploymentCompletePanel = ({ selectedModel, dockerUsername }) => {
 // NEW: Moved AuthorizationPanel outside
 const AuthorizationPanel = ({ currentTheme, authStatus, setAuthStatus, authError, setAuthError, dockerUsername, setDockerUsername, dockerPassword, setDockerPassword, handleAuthorize, deploymentStatus, setCurrentStep }) => {
     
-    // NEW: Autofill username on mount
+    // NEW: Autofill username and PAT/Password state on mount if credentials exist
     useEffect(() => {
         const fetchCredentials = async () => {
             const token = localStorage.getItem('authToken');
             if (!token) return;
 
+            // Check session storage first for immediate access
+            const storedPass = sessionStorage.getItem('dockerPassword');
+            const storedUser = sessionStorage.getItem('dockerUsername');
+            
+            if (storedUser && storedPass) {
+                setDockerUsername(storedUser);
+                setDockerPassword(storedPass);
+                setAuthStatus('authorized');
+                return;
+            }
+
+            // If not in session storage, fetch from backend (MongoDB)
             try {
                 const response = await fetch(`${API_BASE_URL}/api/deployment/docker-credentials`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
                 if (response.ok) {
                     const data = await response.json();
+                    
                     setDockerUsername(data.username);
-                    setAuthStatus('authorized');
+                    if (data.patOrPassword) {
+                        // Load PAT/Password into state for display and persistence update
+                        setDockerPassword(data.patOrPassword); 
+                        setAuthStatus('authorized');
+                        
+                        // NEW: Persist fetched PAT to session storage immediately
+                        sessionStorage.setItem('dockerPassword', data.patOrPassword); 
+                    } else {
+                        setAuthStatus('pending'); // User has username but no saved PAT
+                    }
+                    sessionStorage.setItem('dockerUsername', data.username);
+                    sessionStorage.setItem('authStatus', 'authorized');
                 }
             } catch (error) {
                 console.error("Failed to fetch Docker credentials:", error);
@@ -161,13 +169,14 @@ const AuthorizationPanel = ({ currentTheme, authStatus, setAuthStatus, authError
         if (!dockerUsername) {
             fetchCredentials();
         }
-    }, [setDockerUsername, setAuthStatus, dockerUsername]); // Added dockerUsername to dependency array
+    }, [setDockerUsername, setAuthStatus, dockerUsername, setDockerPassword]); // Added setDockerPassword to dependency array
 
     const handleEditCredentials = () => {
         setAuthStatus('pending');
         setDockerUsername('');
         setDockerPassword('');
         setAuthError(null);
+        sessionStorage.removeItem('dockerPassword'); // Clear sensitive info on edit
     };
 
     return (
@@ -183,11 +192,12 @@ const AuthorizationPanel = ({ currentTheme, authStatus, setAuthStatus, authError
                     </button>
                 )}
             </div>
-            <p className={`text-sm ${currentTheme.textSecondary} mb-6`}>
+            {/* FIX 1: Changed parent <p> to <div> to avoid nested <p> error from ReactMarkdown */}
+            <div className={`text-sm ${currentTheme.textSecondary} mb-6`}>
                 <ReactMarkdown>
                     {`Enter your **Docker Hub Username** and a **Personal Access Token (PAT)** or password to obtain a JWT write token. This token is required by the agent to authenticate and push the final image to your private registry (e.g., \`docker.io/${dockerUsername || 'your_username'}\`).`}
                 </ReactMarkdown>
-            </p>
+            </div>
             
             <div className={`space-y-4 mb-6 ${authStatus === 'authorized' ? 'opacity-50 pointer-events-none' : ''}`}>
                 <div className="relative">
@@ -215,7 +225,8 @@ const AuthorizationPanel = ({ currentTheme, authStatus, setAuthStatus, authError
                             setAuthStatus('pending');
                             setAuthError(null);
                         }}
-                        placeholder="Personal Access Token (PAT) or Password"
+                        // Display a placeholder if state is empty, or "Token loaded" if it's filled from backend
+                        placeholder={authStatus === 'authorized' && dockerPassword.length > 0 ? "Stored PAT/Password Loaded" : "Personal Access Token (PAT) or Password"}
                         className={`w-full ${currentTheme.cardBg} border ${currentTheme.cardBorder} rounded-xl px-4 pl-12 py-3 ${currentTheme.textPrimary} focus:outline-none focus:ring-2 focus:ring-[#00FFE0] transition-all duration-300`}
                     />
                 </div>
@@ -267,11 +278,11 @@ const AuthorizationPanel = ({ currentTheme, authStatus, setAuthStatus, authError
                     <span>How to create a Docker PAT</span>
                 </h4>
                 <ol className={`list-decimal list-inside text-sm ${currentTheme.textSecondary} space-y-1`}>
-                    <li>Go to the Docker Hub Settings page: <a href="https://app.docker.com/" target="_blank" rel="noopener noreferrer" className="text-[#1E90FF] hover:text-[#00FFE0] transition-colors flex items-center">Generate PAT <ExternalLink className="w-3 h-3 ml-1" /></a></li>
-                    <li>Click **"New Access Token"**.</li>
-                    <li>Set the **Token Description** (e.g., "for ModelNest Deployment").</li>
-                    <li>Under **Access Permissions**, ensure you grant **Read, Write, and Delete** permissions.</li>
-                    <li>Click **Generate**.</li>
+                    <li>Go to the Docker Hub Settings page: <a href="[https://app.docker.com/](https://app.docker.com/)" target="_blank" rel="noopener noreferrer" className="text-[#1E90FF] hover:text-[#00FFE0] transition-colors flex items-center">Generate PAT <ExternalLink className="w-3 h-3 ml-1" /></a></li>
+                    <li>Click "New Access Token".</li>
+                    <li>Set the "Token Description" (e.g., "for ModelNest Deployment").</li>
+                    <li>Under "Access Permissions", ensure you grant "Read, Write, and Delete" permissions.</li>
+                    <li>Click "Generate".</li>
                     <li>**Copy the generated PAT** and paste it into the password field above. **(It is shown only once!)**</li>
                 </ol>
             </div>
@@ -296,6 +307,7 @@ const ModelSelectPanel = ({ models, selectedModel, setSelectedModel, setCurrentS
                         key={index}
                         onClick={() => {
                             setSelectedModel(model);
+                            sessionStorage.setItem('selectedModel', JSON.stringify(model)); // PERSIST Model
                             setCurrentStep(2);
                         }}
                         className={`p-5 rounded-2xl text-left border-2 transition-all duration-300 ${
@@ -375,18 +387,21 @@ const DeploymentReviewPanel = ({ currentTheme, deploymentStatus, deploymentLogs,
             </h2>
             
             <div className={`p-4 mb-6 rounded-xl border-2 ${
-                deploymentStatus === 'building' || deploymentStatus === 'pushing' || deploymentStatus === 'deploying' || deploymentStatus === 'debugging'
+                deploymentStatus === 'authenticating' || deploymentStatus === 'building' || deploymentStatus === 'pushing' || deploymentStatus === 'deploying' || deploymentStatus === 'debugging'
                     ? 'border-yellow-500 bg-yellow-500/10'
                     : deploymentStatus === 'failed' ? 'border-red-500 bg-red-500/10' : 'border-gray-500/30'
             }`}>
                 <div className="flex items-center space-x-2 font-bold mb-2">
+                    {deploymentStatus === 'authenticating' && <User className="w-4 h-4 animate-pulse text-yellow-500" />}
                     {deploymentStatus === 'building' && <Loader2 className="w-4 h-4 animate-spin text-yellow-500" />}
                     {deploymentStatus === 'pushing' && <Cloud className="w-4 h-4 animate-pulse text-yellow-500" />}
                     {deploymentStatus === 'deploying' && <BarChart2 className="w-4 h-4 animate-bounce text-yellow-500" />}
                     {deploymentStatus === 'debugging' && <Bug className="w-4 h-4 text-orange-500 animate-pulse" />}
                     {deploymentStatus === 'failed' && <AlertTriangle className="w-4 h-4 text-red-500" />}
-                    <span className={deploymentStatus === 'failed' ? 'text-red-500' : 'text-yellow-500'}>
-                        {deploymentStatus.toUpperCase()}{deploymentStatus === 'debugging' ? '...' : deploymentStatus !== 'idle' ? '...' : ''}
+                    {deploymentStatus === 'complete' && <Check className="w-4 h-4 text-green-400" />}
+
+                    <span className={deploymentStatus === 'failed' ? 'text-red-500' : deploymentStatus === 'complete' ? 'text-green-400' : 'text-yellow-500'}>
+                        {deploymentStatus.toUpperCase()}{deploymentStatus !== 'idle' && deploymentStatus !== 'complete' ? '...' : ''}
                     </span>
                 </div>
                 {retryCount > 0 && deploymentStatus !== 'complete' && (
@@ -511,7 +526,7 @@ export default function DeploymentPage({ theme, toggleTheme }) {
     const [selectedModel, setSelectedModel] = useState(null);
     const [authStatus, setAuthStatus] = useState('pending');
     const [dockerUsername, setDockerUsername] = useState('');
-    const [dockerPassword, setDockerPassword] = useState('');
+    const [dockerPassword, setDockerPassword] = useState(''); // Holds temporary input, cleared on success
     const [authError, setAuthError] = useState(null);    
     const [generatedCode, setGeneratedCode] = useState({ dockerfile: '', pythonCode: '', requirementsTxt: '' });
     
@@ -519,6 +534,7 @@ export default function DeploymentPage({ theme, toggleTheme }) {
     const [deploymentLogs, setDeploymentLogs] = useState([]);
     const [llamaDebugSuggestion, setLlamaDebugSuggestion] = useState(null);
     const [retryCount, setRetryCount] = useState(0);
+    const [eventSource, setEventSource] = useState(null);
     const MAX_AUTO_RETRIES = 5; 
     
     const currentTheme = colorScheme[theme || 'dark'];
@@ -583,12 +599,13 @@ export default function DeploymentPage({ theme, toggleTheme }) {
 
         try {
             const token = localStorage.getItem('authToken');
+            // This endpoint saves the Docker credentials (username and PAT/password) to MongoDB.
             const response = await fetch(`${API_BASE_URL}/api/deployment/record`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({
                     dockerUsername,
-                    dockerPassword,
+                    dockerPassword, // The PAT/Password is passed to the backend for storage
                     dockerAuthToken: 'SIMULATED_JWT_TOKEN',
                     deploymentDetails: {
                         modelName: 'dummy',
@@ -605,12 +622,19 @@ export default function DeploymentPage({ theme, toggleTheme }) {
 
             const receivedToken = "DOCKER_HUB_JWT_TOKEN_RECEIVED";
                 
+            // PERSIST USERNAME, PAT, and AUTH STATUS in session storage
             sessionStorage.setItem('dockerAuthToken', receivedToken);
             sessionStorage.setItem('dockerUsername', dockerUsername);
+            sessionStorage.setItem('dockerPassword', dockerPassword); // NEW: Persist PAT/Password as requested
+            sessionStorage.setItem('authStatus', 'authorized');
 
             setAuthStatus('authorized');
             setDeploymentStatus('idle');
             setAuthError(null);
+            
+            // Note: We keep dockerPassword in state now since we're using it for persistence and display autofill
+            // setDockerPassword(''); 
+
         } catch (error) {
             setAuthStatus('failed');
             setDeploymentStatus('idle');
@@ -618,7 +642,7 @@ export default function DeploymentPage({ theme, toggleTheme }) {
         }
     };
     
-    const handleGenerateCode = useCallback(async () => {
+    const handleGenerateCode = useCallback(async (isRetry = false) => {
         if (!selectedModel) return;
 
         setDeploymentStatus('generating');
@@ -636,14 +660,17 @@ export default function DeploymentPage({ theme, toggleTheme }) {
                 modelSourceDetail += `\n- The source model repository is available at the Hugging Face URL: ${selectedModel.hfUrl}.`;
             }
         }
+        
+        // Pass debugging details only if it's a retry attempt
+        const debugSuggestion = isRetry && llamaDebugSuggestion ? llamaDebugSuggestion : null;
 
         const payload = {
             modelIdentifier,
             platform,
             authenticatedUsername,
             modelSourceDetail,
-            isRetry: false,
-            llamaDebugSuggestion: null
+            isRetry,
+            llamaDebugSuggestion: debugSuggestion
         };
 
         try {
@@ -660,6 +687,10 @@ export default function DeploymentPage({ theme, toggleTheme }) {
             
             const extracted = extractCode(aiText);
             setGeneratedCode(extracted);
+            
+            // NEW: Persist generated code to session storage
+            sessionStorage.setItem('generatedCode', JSON.stringify(extracted));
+            
             setLlamaDebugSuggestion(null);
             setCurrentStep(4);
             
@@ -669,104 +700,149 @@ export default function DeploymentPage({ theme, toggleTheme }) {
         } finally {
             setDeploymentStatus('idle');
         }
-    }, [selectedModel, dockerUsername]);
+    }, [selectedModel, dockerUsername, llamaDebugSuggestion]);
+    
     
     const handleE2EDeployment = async () => {
-        setDeploymentLogs([]);
-        setDeploymentStatus('building');
-        
+        // --- Pre-flight Checks ---
         const authenticatedUsername = sessionStorage.getItem('dockerUsername');
-        const modelTag = `${authenticatedUsername}/${selectedModel.modelName || selectedModel.name}:latest`;
-        const buildShouldSucceed = true;
-
-        const logBuild = (message, delay, isError = false) => {
-            setTimeout(() => {
-                setDeploymentLogs(prev => [...prev, { message, isError }]);
-            }, delay);
-        };
+        const patOrPassword = sessionStorage.getItem('dockerPassword'); // NEW: Fetch directly from session storage
+        const token = localStorage.getItem('authToken');
         
-        logBuild(`[DOCKER LOGIN] Attempting login for ${authenticatedUsername} using JWT...`, 500);
-        logBuild(`[DOCKER LOGIN] Login succeeded.`, 1000);
-        logBuild(`[DOCKER BUILD] Building image: ${modelTag}`, 1500);
-        logBuild(`[CONTEXT] requirements.txt content prepared for build.`, 1700);
+        // Use locally stored code if state is empty (e.g., after reload/re-render)
+        let currentGeneratedCode = generatedCode;
+        if (!currentGeneratedCode || !currentGeneratedCode.dockerfile || currentGeneratedCode.dockerfile.startsWith('# Failed')) {
+             const storedCode = sessionStorage.getItem('generatedCode');
+             if (storedCode) {
+                 currentGeneratedCode = JSON.parse(storedCode);
+                 setGeneratedCode(currentGeneratedCode);
+             }
+        }
 
-        const logsToUse = buildShouldSucceed ? mockSuccessLogs : mockBuildLogs;
+
+        if (!authenticatedUsername || !patOrPassword || !token || !currentGeneratedCode.dockerfile || currentGeneratedCode.dockerfile.startsWith('# Failed')) {
+            setDeploymentLogs([{ message: "[FATAL] Missing credentials or generated code. Please complete previous steps.", isError: true }]);
+            setDeploymentStatus('failed');
+            return;
+        }
+        if (eventSource) {
+            eventSource.close();
+        }
         
-        logsToUse.forEach((log, index) => {
-            logBuild(log, 2000 + index * 300, log.startsWith('ERROR'));
-        });
+        // Use locally stored model if state is empty (e.g., after reload/re-render)
+        let currentSelectedModel = selectedModel;
+        if (!currentSelectedModel) {
+             const storedModel = sessionStorage.getItem('selectedModel');
+             if (storedModel) {
+                 currentSelectedModel = JSON.parse(storedModel);
+                 setSelectedModel(currentSelectedModel);
+             }
+        }
+        if (!currentSelectedModel) {
+             setDeploymentLogs([{ message: "[FATAL] Missing selected model details.", isError: true }]);
+             setDeploymentStatus('failed');
+             return;
+        }
+
+
+        // --- REMOVED: Fetching PAT from backend is no longer needed ---
+        // We now rely on session storage for the PAT, as requested.
+        // ---------------------------------------------
         
-        const logDuration = 2000 + logsToUse.length * 300;
-        const finalDelay = logDuration + 500;
-        
-        setTimeout(async () => {
-            if (!buildShouldSucceed) {
-                setDeploymentStatus('failed');
-                logBuild(`[BUILD FAILED] Image build failed. Checking logs...`, finalDelay, true);
-                
-                if (retryCount < MAX_AUTO_RETRIES) {
-                    handleLlamaDebugging(modelTag, mockBuildLogs, true); 
-                } else {
-                     setDeploymentStatus('failed');
-                }
-            } else {
-                setRetryCount(0);
-                
-                const dockerUsername = sessionStorage.getItem('dockerUsername');
-                const dockerAuthToken = sessionStorage.getItem('dockerAuthToken');
-                const modelDetails = selectedModel;
-                const deployedImageTag = `${dockerUsername}/${modelDetails.modelName || modelDetails.name}:latest`;
-                const authToken = localStorage.getItem('authToken');
+        // --- 1. Initiate Deployment Process (POST) ---
+        setDeploymentLogs(prev => [...prev, { message: "[INIT] Posting deployment files and credentials to agent...", isError: false }]);
+        setDeploymentStatus('initiating');
 
-                logBuild(`[DOCKER BUILD] Build successful. Image tagged: ${modelTag}`, logDuration + 500);
-                setDeploymentStatus('pushing');
-                
-                logBuild(`[DOCKER PUSH] Pushing image to registry ${authenticatedUsername}...`, logDuration + 1500);
-                
-                setTimeout(() => {
-                    setDeploymentStatus('deploying');
-                    logBuild(`[DEPLOYMENT] Pushing complete. Simulating creation of K8s/ECS manifest...`, logDuration + 2500);
-                    logBuild(`[DEPLOYMENT] Launching container on production cluster...`, logDuration + 3500);
-                }, logDuration + 3500);
+        try {
+            // POST request to send all code and credentials for the backend to start the stream process
+            const initiationResponse = await fetch(`${API_BASE_URL}/api/deployment/execute-init`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({
+                    modelIdentifier: currentSelectedModel.modelName || currentSelectedModel.name,
+                    dockerUsername: authenticatedUsername,
+                    dockerPassword: patOrPassword, // <-- Now using the session-stored PAT/Password
+                    dockerfile: currentGeneratedCode.dockerfile,
+                    pythonCode: currentGeneratedCode.pythonCode,
+                    requirementsTxt: currentGeneratedCode.requirementsTxt,
+                    selectedModel: currentSelectedModel,
+                })
+            });
 
-                try {
-                    const recordResponse = await fetch(`${API_BASE_URL}/api/deployment/record`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-                        body: JSON.stringify({
-                            dockerUsername,
-                            dockerPassword,
-                            dockerAuthToken,
-                            deploymentDetails: {
-                                modelName: modelDetails.modelName || modelDetails.name,
-                                sourcePlatform: modelDetails.platform || 'Custom/Trained',
-                                deployedImageTag: deployedImageTag,
-                                category: modelDetails.category,
-                                description: modelDetails.description,
-                                imageUrl: modelDetails.imageUrl || 'https://placehold.co/100x100/1E90FF/ffffff?text=AI+Model'
-                            }
-                        })
-                    });
-
-                    if (!recordResponse.ok) {
-                        console.error("Failed to record deployment permanently.", await recordResponse.json());
-                        logBuild(`[RECORD FAILED] Could not save deployment record permanently.`, logDuration + 5000, true);
-                    } else {
-                        logBuild(`[RECORD SUCCESS] Deployment record and credentials saved to MongoDB.`, logDuration + 5000);
-                    }
-
-                } catch (error) {
-                     console.error("Error saving deployment record:", error);
-                     logBuild(`[RECORD FAILED] Server error while saving deployment record.`, logDuration + 5000, true);
-                }
-                
-                setDeploymentStatus('complete');
-                setCurrentStep(5);
-                logBuild(`[SUCCESS] Deployment complete. Endpoint ready.`, logDuration + 6000);
+            if (!initiationResponse.ok) {
+                const errorData = await initiationResponse.json();
+                throw new Error(errorData.message || `Failed to initialize deployment: ${initiationResponse.status}`);
             }
-        }, finalDelay);
+            
+            const initResult = await initiationResponse.json();
+            const sessionId = initResult.sessionId;
+            
+            // --- FIX START: Pass JWT token via query param for SSE authorization ---
+            const sseUrl = `${API_BASE_URL}/api/deployment/execute-stream/${sessionId}?token=${token}`;
+            // --- FIX END ---
+
+            setDeploymentLogs(prev => [...prev, { message: `[AGENT] Deployment accepted. Session ID: ${sessionId}. Establishing real-time log stream...`, isError: false }]);
+            setDeploymentStatus('authenticating'); // Move status forward based on assumed success of initiation
+
+            // --- 2. Establish Real-time Log Stream (GET SSE) ---
+            // const es = new EventSource(`${API_BASE_URL}/api/deployment/execute-stream/${sessionId}`); // Old URL
+            const es = new EventSource(sseUrl); // New URL with token
+            
+            es.onopen = () => {
+                 setDeploymentLogs(prev => [...prev, { message: "[STREAM] Connection established with deployment agent.", isError: false }]);
+            };
+
+            es.onerror = (err) => {
+                console.error("SSE Error:", err);
+                // Only mark as failed if it's not already complete/failed
+                setDeploymentStatus(prev => prev === 'complete' ? 'complete' : 'failed');
+                setDeploymentLogs(prev => [...prev, { message: "[STREAM] Connection error. Check server logs for details.", isError: true }]);
+                es.close();
+                setEventSource(null);
+            };
+            
+            es.addEventListener('log', (event) => {
+                const data = JSON.parse(event.data);
+                setDeploymentLogs(prev => [...prev, { message: data.message, isError: data.isError }]);
+                // Scroll to bottom of log window when a new log arrives (simulated, needs actual log container access for real world)
+                const logWindow = document.querySelector('.h-40.overflow-y-auto');
+                if (logWindow) {
+                    logWindow.scrollTop = logWindow.scrollHeight;
+                }
+            });
+
+            es.addEventListener('status', (event) => {
+                const newStatus = event.data.toLowerCase();
+                setDeploymentStatus(newStatus);
+            });
+
+            es.addEventListener('end', () => {
+                setDeploymentLogs(prev => [...prev, { message: "[STREAM] Deployment stream closed by server.", isError: false }]);
+                es.close();
+                setEventSource(null);
+                
+                // Final state determination (mostly handled by the 'status' event)
+                setDeploymentStatus(prev => {
+                    if (prev !== 'complete' && prev !== 'failed') {
+                        return 'failed'; // Assume failure if stream closes unexpectedly before final status
+                    }
+                    return prev;
+                });
+            });
+
+            setEventSource(es);
+            
+        } catch (error) {
+            setDeploymentLogs(prev => [...prev, { message: `[FATAL] Deployment initiation failed: ${error.message}`, isError: true }]);
+            setDeploymentStatus('failed');
+            if (eventSource) {
+                eventSource.close();
+                setEventSource(null);
+            }
+        }
     };
     
+    // NOTE: handleLlamaDebugging is kept as a mock for the retry logic
     const handleLlamaDebugging = async (modelTag, logs, autoRetry = false) => {
         setDeploymentStatus('debugging');
 
@@ -824,17 +900,53 @@ export default function DeploymentPage({ theme, toggleTheme }) {
 
     useEffect(() => {
         fetchUserData();
-        setGeneratedCode({ dockerfile: '', pythonCode: '', requirementsTxt: '' });
+        
+        // NEW: Load persisted data from session storage on mount
+        const storedCode = sessionStorage.getItem('generatedCode');
+        if (storedCode) {
+            setGeneratedCode(JSON.parse(storedCode));
+        } else {
+            setGeneratedCode({ dockerfile: '', pythonCode: '', requirementsTxt: '' });
+        }
+        
+        const storedModel = sessionStorage.getItem('selectedModel');
+        if (storedModel) {
+            setSelectedModel(JSON.parse(storedModel));
+        }
+        
+        // Load auth status, username, and PAT/Password from session storage
+        const storedAuthStatus = sessionStorage.getItem('authStatus');
+        const storedUsername = sessionStorage.getItem('dockerUsername');
+        const storedPassword = sessionStorage.getItem('dockerPassword'); // NEW: Load stored password
+
         setDeploymentStatus('idle');
         
-        if (sessionStorage.getItem('dockerAuthToken') && sessionStorage.getItem('dockerUsername')) {
+        if (storedAuthStatus === 'authorized' && storedUsername) {
             setAuthStatus('authorized');
-            setDockerUsername(sessionStorage.getItem('dockerUsername'));
+            setDockerUsername(storedUsername);
+            // NEW: Set password state if found
+            if (storedPassword) {
+                setDockerPassword(storedPassword);
+            }
         } else {
              setAuthStatus('pending');
         }
         
+        // Cleanup EventSource on unmount
+        return () => {
+            if (eventSource) {
+                eventSource.close();
+                setEventSource(null);
+            }
+        };
     }, [fetchUserData]);
+    
+    // NEW useEffect: Automatically move to step 5 on completion
+    useEffect(() => {
+        if (deploymentStatus === 'complete') {
+            setCurrentStep(5);
+        }
+    }, [deploymentStatus]);
     
     const renderStepContent = () => {
         if (!selectedModel) return <ModelSelectPanel {...{ models, selectedModel, setSelectedModel, setCurrentStep, currentTheme }} />;
@@ -939,7 +1051,7 @@ export default function DeploymentPage({ theme, toggleTheme }) {
             </div>
             
             <style jsx="true">{`
-                @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
+                @import url('[https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap](https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap)');
                 
                 .font-sans {
                     font-family: 'Inter', sans-serif';
