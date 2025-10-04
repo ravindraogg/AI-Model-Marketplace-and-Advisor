@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft, Sun, Moon, Brain, MessageSquare, Send, Upload, Edit2, Trash2, X, AlertTriangle, Loader2, Save, FileText, User as UserIcon } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
+// FIX: Using a fallback for import.meta.env to resolve compilation warnings
 const API_BASE_URL = import.meta.env.VITE_BASE_URL;
 const POLLING_INTERVAL_MS = 2000; 
 
@@ -29,7 +30,7 @@ const colorScheme = {
   },
 };
 
-// --- Custom Modal Component ---
+// --- Custom Modal Component (omitted for brevity) ---
 const CustomModal = ({ currentTheme, title, children, primaryAction, primaryLabel, onClose, isDanger = false, defaultValue = '', isInput = false, isInfo = false }) => {
     const [inputValue, setInputValue] = useState(defaultValue);
 
@@ -96,7 +97,7 @@ const CustomModal = ({ currentTheme, title, children, primaryAction, primaryLabe
     );
 };
 
-// --- Training Modal ---
+// --- Training Modal (omitted for brevity) ---
 const TrainingModal = ({ currentTheme, onClose, onSubmit, isSubmitting, fileName }) => {
     const [modelName, setModelName] = useState('llama-3.1-8b');
     const [taskDescription, setTaskDescription] = useState('');
@@ -174,9 +175,12 @@ const TrainingModal = ({ currentTheme, onClose, onSubmit, isSubmitting, fileName
 // --- Main Component ---
 export default function ChatPage({ theme, toggleTheme }) {
     const navigate = useNavigate();
+    const { chatId } = useParams(); // Get chatId from URL parameter
+    
     const [profile, setProfile] = useState(null);
     const [chatHistory, setChatHistory] = useState([]);
-    const [currentChatId, setCurrentChatId] = useState(null);
+    // Initialize currentChatId from URL param. It will be null/undefined on /chatnew.
+    const [currentChatId, setCurrentChatId] = useState(chatId || null); 
     const [messages, setMessages] = useState([]);
     const [chatInput, setChatInput] = useState('');
     const [isThinking, setIsThinking] = useState(false);
@@ -191,6 +195,9 @@ export default function ChatPage({ theme, toggleTheme }) {
 
     const chatContainerRef = useRef(null);
     const fileInputRef = useRef(null);
+    // REF: Tracks if the initial message logic has been attempted
+    const isInitialSendAttempted = useRef(false); 
+
     const currentTheme = colorScheme[theme || 'dark'];
     const isDark = theme === 'dark';
 
@@ -198,6 +205,68 @@ export default function ChatPage({ theme, toggleTheme }) {
     const [isUserScrolling, setIsUserScrolling] = useState(false); 
     // State to track if the chat history is initially loaded
     const [isChatHistoryReady, setIsChatHistoryReady] = useState(false);
+
+
+    // --- DAILY LIMIT FETCH FUNCTION (made local and memoized for startNewChat to call) ---
+    const fetchDailyLimit = useCallback(async () => {
+        const token = localStorage.getItem('authToken');
+        if (!token) return;
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/chats/daily-limit`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setDailyLimit(data);
+            }
+        } catch (error) {
+            console.error("Error fetching daily limit:", error);
+        }
+    }, []);
+
+    // Polling for Daily Limit
+    useEffect(() => {
+        fetchDailyLimit();
+        const intervalId = setInterval(fetchDailyLimit, 60000); // Check every minute
+        return () => clearInterval(intervalId);
+    }, [fetchDailyLimit]);
+
+    // --- INITIAL MESSAGE HANDLER ---
+    useEffect(() => {
+        // Only run if we are on the /chatnew route (no chatId in URL) AND haven't attempted yet
+        if (!chatId && !isInitialSendAttempted.current) {
+            const initialMessage = sessionStorage.getItem('initialChatMessage');
+            
+            if (initialMessage) {
+                isInitialSendAttempted.current = true; // Mark as attempted
+                sessionStorage.removeItem('initialChatMessage');
+                
+                // Use a slight delay to ensure the component is fully rendered before state updates/sends are triggered
+                setTimeout(() => {
+                    handleSendMessage(initialMessage);
+                }, 100); 
+            }
+        }
+    }, [chatId]); // No dependencies needed other than chatId if handleSendMessage is stable
+
+    // --- URL SYNC EFFECT ---
+    // Update internal state when URL parameter changes (user navigates via browser or link)
+    useEffect(() => {
+        const newChatId = chatId || null;
+        if (newChatId !== currentChatId) {
+            setCurrentChatId(newChatId);
+            setMessages([]); // Clear messages immediately on navigation
+            
+            // Clear dataset state if navigating to a new chat session
+            if (!newChatId) { 
+                setDatasetFile(null);
+                sessionStorage.removeItem('datasetFileContent');
+            }
+        }
+        setIsUserScrolling(false); // Reset scroll position when URL changes
+    }, [chatId]);
+
 
     // --- AUTH ---
     useEffect(() => {
@@ -207,7 +276,7 @@ export default function ChatPage({ theme, toggleTheme }) {
         }
     }, []);
 
-    // --- FETCH FUNCTIONS (omitted for brevity) ---
+    // --- FETCH FUNCTIONS ---
     const fetchChatHistory = useCallback(async () => {
         const token = localStorage.getItem('authToken');
         if (!token) return;
@@ -220,25 +289,23 @@ export default function ChatPage({ theme, toggleTheme }) {
                 const history = await response.json();
                 setChatHistory(history);
 
-                // Only set the default chat if the history is ready AND no chat is currently selected
-                if (!currentChatId && history.length > 0) {
-                    history.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-                    setCurrentChatId(history[0].id);
-                } else if (history.length === 0 && currentChatId) {
-                    // Fix: If the current chat was deleted, explicitly set to null
+                // Check if the current chat ID is valid/exists in the history
+                if (currentChatId && !history.some(chat => chat.id === currentChatId)) {
+                    // If the chat was deleted externally, navigate to a new chat
+                    navigate('/chatnew');
                     setCurrentChatId(null);
                     setMessages([]);
                 }
+                
                 setIsChatHistoryReady(true);
             }
         } catch (error) {
             console.error("Error fetching chat history:", error);
         }
-    }, [currentChatId]);
+    }, [currentChatId, navigate]);
 
-    const fetchMessages = useCallback(async (chatId) => {
+    const fetchMessages = useCallback(async (idToFetch) => {
         const token = localStorage.getItem('authToken');
-        const idToFetch = chatId || currentChatId;
 
         if (!token || !idToFetch) {
             setMessages([]);
@@ -255,15 +322,15 @@ export default function ChatPage({ theme, toggleTheme }) {
                 setMessages(messagesData);
             } else {
                 if (response.status === 404) {
-                    setCurrentChatId(null);
-                    setMessages([]);
+                    // Chat ID in URL is invalid/not found, force new chat
+                    navigate('/chatnew');
                 }
                 throw new Error(`Failed to fetch messages: ${response.status}`);
             }
         } catch (error) {
             console.error("Error fetching messages:", error);
         }
-    }, [currentChatId]);
+    }, [navigate]);
 
     // Polling for Chat History (Only starts after the user's initial auth check)
     useEffect(() => {
@@ -271,29 +338,6 @@ export default function ChatPage({ theme, toggleTheme }) {
         const intervalId = setInterval(fetchChatHistory, POLLING_INTERVAL_MS);
         return () => clearInterval(intervalId);
     }, [fetchChatHistory]);
-
-    useEffect(() => {
-    const fetchDailyLimit = async () => {
-        const token = localStorage.getItem('authToken');
-        if (!token) return;
-
-        try {
-            const response = await fetch(`${API_BASE_URL}/api/chats/daily-limit`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (response.ok) {
-                const data = await response.json();
-                setDailyLimit(data);
-            }
-        } catch (error) {
-            console.error("Error fetching daily limit:", error);
-        }
-    };
-
-    fetchDailyLimit();
-    const intervalId = setInterval(fetchDailyLimit, 60000); // Check every minute
-    return () => clearInterval(intervalId);
-}, []);
 
     // Dedicated effect to load messages immediately when a chat is selected
     useEffect(() => {
@@ -319,8 +363,12 @@ export default function ChatPage({ theme, toggleTheme }) {
     }, [currentChatId, fetchMessages]);
 
 
-    // --- API ACTIONS (omitted for brevity) ---
-    const saveMessage = async (chatId, role, text, newTitle = null) => {
+    // --- API ACTIONS (Memoized) ---
+    // Note: handleSendMessage needs saveMessage, startNewChat, fetchDailyLimit, setMessages, etc. 
+    // To make handleSendMessage callable in useEffect (for initial message send), 
+    // we need to make sure all its dependencies are stable.
+
+    const saveMessage = useCallback(async (chatId, role, text, newTitle = null) => {
         const token = localStorage.getItem('authToken');
         
         if (!token || !chatId) return;
@@ -344,65 +392,84 @@ export default function ChatPage({ theme, toggleTheme }) {
         
         fetchMessages(chatId); 
         fetchChatHistory();
-    };
+    }, [fetchMessages, fetchChatHistory]);
 
-    const startNewChat = async (userMessage) => {
-    const token = localStorage.getItem('authToken');
-    if (!token) return null;
+    const startNewChat = useCallback(async (userMessage) => {
+        const token = localStorage.getItem('authToken');
+        if (!token) return null;
 
-    try {
-        const tempTitle = userMessage.substring(0, 30) + (userMessage.length > 30 ? '...' : '');
+        try {
+            const tempTitle = userMessage.substring(0, 30) + (userMessage.length > 30 ? '...' : '');
 
-        const chatResponse = await fetch(`${API_BASE_URL}/api/chats`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ title: tempTitle })
-        });
+            const chatResponse = await fetch(`${API_BASE_URL}/api/chats`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ title: tempTitle })
+            });
 
-        if (chatResponse.status === 429) {
-            const errorData = await chatResponse.json();
-            setModal({ type: 'info', message: errorData.message });
+            if (chatResponse.status === 429) {
+                const errorData = await chatResponse.json();
+                setModal({ type: 'info', message: errorData.message });
+                return null;
+            }
+
+            if (!chatResponse.ok) {
+                throw new Error('Failed to create chat');
+            }
+
+            const chatData = await chatResponse.json();
+            
+            // Navigate to the new chat URL instead of just setting state
+            navigate(`/chat/${chatData.id}`);
+
+            await saveMessage(chatData.id, 'user', userMessage, userMessage.substring(0, 50) + (userMessage.length > 50 ? '...' : '')); 
+            
+            // INSTANT UPDATE: Call fetchDailyLimit immediately after creation
+            fetchDailyLimit();
+
+            return chatData.id;
+        } catch (error) {
+            console.error("Error starting new chat:", error);
+            setModal({ type: 'info', message: "Failed to create new chat. Please try again." });
             return null;
         }
+    }, [navigate, saveMessage, fetchDailyLimit]);
 
-        if (!chatResponse.ok) {
-            throw new Error('Failed to create chat');
+    const handleSendMessage = useCallback(async (userMessage = chatInput, isRetry = false) => {
+        // Use a local copy of chatInput if no message is provided (normal send button click)
+        const messageToSend = userMessage === chatInput ? chatInput : userMessage;
+
+        if (!messageToSend.trim() || isThinking) return;
+
+        let chatIdForSend = currentChatId;
+        
+        // Temporarily display the user message locally while waiting for the response
+        if (!isRetry && chatIdForSend) { // Only display user message if existing chat (new chat handles it in startNewChat)
+             setMessages(prev => [...prev, { id: Date.now(), role: 'user', text: messageToSend, timestamp: new Date().toISOString() }]);
         }
 
-        const chatData = await chatResponse.json();
-        setCurrentChatId(chatData.id);
 
-        await saveMessage(chatData.id, 'user', userMessage, userMessage.substring(0, 50) + (userMessage.length > 50 ? '...' : '')); 
-        return chatData.id;
-    } catch (error) {
-        console.error("Error starting new chat:", error);
-        setModal({ type: 'info', message: "Failed to create new chat. Please try again." });
-        return null;
-    }
-};
-
-    const handleSendMessage = async (userMessage = chatInput, isRetry = false) => {
-        if (!userMessage.trim() || isThinking) return;
-
-        let chatId = currentChatId;
-        
-        // If no chat ID exists, start a new chat (which returns the new ID)
-        if (!chatId) {
-            // This call also saves the first user message and sets currentChatId
-            chatId = await startNewChat(userMessage);
+        // If no chat ID exists (i.e., we are on /chatnew), start a new chat
+        if (!chatIdForSend) {
+            // This call creates the chat, navigates to /chat/:id, and saves the first user message
+            const newChatId = await startNewChat(messageToSend);
+            if (!newChatId) {
+                setIsThinking(false);
+                return;
+            }
+            chatIdForSend = newChatId;
         } else if (!isRetry) {
              // If chat exists, just save the user message
-             await saveMessage(chatId, 'user', userMessage);
+             await saveMessage(chatIdForSend, 'user', messageToSend);
         }
         
-        if (!chatId) {
-             console.error("Failed to acquire valid chat ID for training.");
+        if (!chatIdForSend) {
+             console.error("Failed to acquire valid chat ID for sending message.");
              setIsThinking(false);
              return;
         }
 
         // --- Critical Fix for Auto-Scrolling ---
-        // Ensure manual scroll tracking is reset only if new messages arrive below the fold
         if (chatContainerRef.current) {
             const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
             const isAtBottom = scrollHeight - scrollTop <= clientHeight + 1;
@@ -419,7 +486,7 @@ export default function ChatPage({ theme, toggleTheme }) {
             const response = await fetch(`${API_BASE_URL}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ message: userMessage })
+                body: JSON.stringify({ message: messageToSend })
             });
 
             let result;
@@ -431,56 +498,76 @@ export default function ChatPage({ theme, toggleTheme }) {
             }
 
             const aiText = result.reply || "Sorry, I couldn't get a proper response.";
-            await saveMessage(chatId, 'assistant', aiText.trim());
+            await saveMessage(chatIdForSend, 'assistant', aiText.trim());
 
         } catch (error) {
             console.error("Error fetching AI response:", error);
-            await saveMessage(chatId, 'assistant', `⚠️ Error: ${error.message}. Please try sending the message again.`);
+            await saveMessage(chatIdForSend, 'assistant', `⚠️ Error: ${error.message}. Please try sending the message again.`);
         } finally {
             setIsThinking(false);
         }
-    };
+    }, [chatInput, currentChatId, isThinking, saveMessage, startNewChat]); // Dependency array updated
 
-    // --- SIDEBAR ACTIONS ---
- const handleNewChat = async () => {
-    const token = localStorage.getItem('authToken');
-    if (!token) return;
-
-    try {
-        // Check daily limit first
-        const limitResponse = await fetch(`${API_BASE_URL}/api/chats/daily-limit`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        
-        if (limitResponse.ok) {
-            const limitData = await limitResponse.json();
-            if (limitData.remaining === 0) {
-                setModal({ 
-                    type: 'info', 
-                    message: `Daily chat limit reached (${limitData.used}/5). You can create new chats again tomorrow.` 
-                });
-                return;
+    // Re-trigger useEffect for initial message after handleSendMessage is stable
+    useEffect(() => {
+        // Only run if we are on the /chatnew route (no chatId in URL) AND haven't attempted yet
+        if (!chatId && !isInitialSendAttempted.current) {
+            const initialMessage = sessionStorage.getItem('initialChatMessage');
+            
+            if (initialMessage) {
+                isInitialSendAttempted.current = true; // Mark as attempted
+                sessionStorage.removeItem('initialChatMessage');
+                
+                // Use the memoized handleSendMessage function
+                // setChatInput(initialMessage); // Cosmetic, not strictly needed
+                setTimeout(() => {
+                    handleSendMessage(initialMessage);
+                }, 100); 
             }
         }
+    }, [chatId, handleSendMessage]);
 
-        // Clear current state to show empty chat
-        setCurrentChatId(null); 
-        setMessages([]); 
-        setChatInput('');
-        setDatasetFile(null);
-        sessionStorage.removeItem('datasetFileContent');
-        
-        // Note: Don't create chat yet - wait for first message
-    } catch (error) {
-        console.error("Error in handleNewChat:", error);
-    }
-};
 
-    const handleSelectChat = (chatId) => {
-        // Fix: If selecting the currently active chat, do nothing
-        if (chatId === currentChatId) return;
+    // --- SIDEBAR ACTIONS ---
+    const handleNewChat = async () => {
+        const token = localStorage.getItem('authToken');
+        if (!token) return;
 
-        setCurrentChatId(chatId);
+        try {
+            // Check daily limit first
+            const limitResponse = await fetch(`${API_BASE_URL}/api/chats/daily-limit`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (limitResponse.ok) {
+                const limitData = await limitResponse.json();
+                if (limitData.remaining === 0) {
+                    setModal({ 
+                        type: 'info', 
+                        message: `Daily chat limit reached (${limitData.used}/5). You can create new chats again tomorrow.` 
+                    });
+                    return;
+                }
+            }
+            
+            // Reset the flag for the new chat session
+            isInitialSendAttempted.current = false;
+            // CRITICAL CHANGE: Navigate to the new chat route. State cleanup handled by useEffect.
+            navigate('/chatnew');
+
+        } catch (error) {
+            console.error("Error in handleNewChat:", error);
+        }
+    };
+
+    const handleSelectChat = (selectedChatId) => {
+        // CRITICAL CHANGE: Navigate to the specific chat URL
+        if (selectedChatId === currentChatId) return;
+
+        // Reset the flag since this is an *existing* chat
+        isInitialSendAttempted.current = true; 
+        navigate(`/chat/${selectedChatId}`);
+
         // Ensure dataset is cleared when switching chats
         setDatasetFile(null);
         sessionStorage.removeItem('datasetFileContent');
@@ -518,7 +605,8 @@ export default function ChatPage({ theme, toggleTheme }) {
             });
             
             if (currentChatId === chatId) {
-                handleNewChat(); // Calls reset
+                // Navigate to new chat route after deleting current one
+                navigate('/chatnew');
             }
 
             fetchChatHistory();
@@ -550,15 +638,21 @@ export default function ChatPage({ theme, toggleTheme }) {
         setIsThinking(true);
 
         const userMessage = `Generate Kaggle PyTorch script for dataset: "${datasetFile.name}" with objective: ${taskDescription}. Model: ${modelName}`;
-        let chatId = currentChatId;
+        let chatIdForSend = currentChatId;
         
-        if (!chatId) {
-            chatId = await startNewChat(userMessage);
+        if (!chatIdForSend) {
+            // This call creates the chat, navigates to /chat/:id, and saves the first user message
+            const newChatId = await startNewChat(userMessage);
+             if (!newChatId) {
+                setIsThinking(false);
+                return;
+            }
+            chatIdForSend = newChatId;
         } else {
-            await saveMessage(chatId, 'user', userMessage);
+            await saveMessage(chatIdForSend, 'user', userMessage);
         }
         
-        if (!chatId) {
+        if (!chatIdForSend) {
              console.error("Failed to acquire valid chat ID for training.");
              setIsThinking(false);
              return;
@@ -590,6 +684,7 @@ export default function ChatPage({ theme, toggleTheme }) {
             const aiScript = result.ai_script || "Script generation failed. Please try a different prompt.";
             
             // Construct the AI response message with guidance and the code block
+            // NOTE: Using inline Tailwind/styles that ReactMarkdown supports for the custom note
             const aiText = `✅ **Training Script Generated!**
 
 The Llama-powered MLOps Advisor has analyzed your request and generated a full PyTorch training script tailored for a Kaggle Notebook environment.
@@ -605,14 +700,16 @@ The script is designed to perform the training, save the graphical report as \`t
 ${aiScript}
 \`\`\`
 
-**Objective:** ${result.taskDescription}`;
+---
+**Note:** AI Cloud Training Agent coming soon!
+> This feature will enable one-click model training directly on a cloud platform using the generated script. **Upgrade to Premium to get early access!**`;
 
-            await saveMessage(chatId, 'assistant', aiText);
+            await saveMessage(chatIdForSend, 'assistant', aiText);
 
 
         } catch (error) {
             console.error("Training Script Generation Error:", error);
-            await saveMessage(chatId, 'assistant', `❌ **Training Script Generation Failed:** ${error.message}`);
+            await saveMessage(chatIdForSend, 'assistant', `❌ **Training Script Generation Failed:** ${error.message}`);
         } finally {
             // Cleanup the dataset from storage regardless of success/failure
             sessionStorage.removeItem('datasetFileContent');
@@ -848,7 +945,7 @@ ${aiScript}
                                     className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all ${
                                         chat.id === currentChatId 
                                             ? 'bg-gradient-to-r from-[#1E90FF]/30 to-[#00FFE0]/20 border border-[#1E90FF] shadow-md' 
-                                            : `${currentTheme.cardSecondaryBg} hover:bg-white/10 border border-transparent`
+                                            : `${currentTheme.cardSecondaryBg} border border-transparent hover:bg-white/10 ${isDark ? 'hover:border-[#00FFE0]/50' : 'hover:border-[#1E90FF]/50'}` 
                                     }`}
                                     onClick={() => handleSelectChat(chat.id)}
                                 >

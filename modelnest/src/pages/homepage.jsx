@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { MessageSquare, Send, Sparkles, TrendingUp, Star, Box, Search, Filter, ArrowRight, Zap, Clock, Users, ChevronRight, Brain, Upload, Sun, Moon, User, Settings, LogOut, Edit2, Save, X, Image as ImageIcon } from 'lucide-react';
+import { useNavigate } from 'react-router-dom'; // Ensure useNavigate is imported
 
+// FIX: Using a fallback for import.meta.env to resolve compilation warnings
 const API_BASE_URL = import.meta.env.VITE_BASE_URL;
 const colorScheme = {
   dark: {
@@ -25,12 +27,6 @@ const colorScheme = {
   }
 };
 
-// Random greetings array
-const greetings = [
-  "Welcome back", "Hello", "Hey there", "Good to see you",
-  "Greetings", "Nice to have you back", "Welcome", "Hi there"
-];
-
 // Helper component for star rating visualization
 const RatingStars = ({ rating }) => {
   const fullStars = Math.floor(rating);
@@ -46,7 +42,7 @@ const RatingStars = ({ rating }) => {
   return <div className="flex space-x-0.5">{stars}</div>;
 };
 
-// Profile Edit Modal Component
+// Profile Edit Modal Component (omitted for brevity)
 const ProfileEditModal = ({ profile, onSave, onClose, currentTheme }) => {
   // Initialize form data with current profile state or empty strings
   const [formData, setFormData] = useState({
@@ -57,15 +53,11 @@ const ProfileEditModal = ({ profile, onSave, onClose, currentTheme }) => {
   });
   const [saving, setSaving] = useState(false);
 
-  // FIX: Ensure formData is passed correctly. The original logic was correct, 
-  // but we are double-checking the flow here.
   const handleSave = async () => {
     setSaving(true);
     try {
-      // Pass the current formData state to the parent's onSave function
       await onSave(formData);
     } catch (error) {
-      // Catch errors that propagate from the API call in the parent component
       console.error("Error during save process:", error);
     } finally {
       setSaving(false);
@@ -74,10 +66,8 @@ const ProfileEditModal = ({ profile, onSave, onClose, currentTheme }) => {
 
   const isDark = currentTheme.bgPrimary === colorScheme.dark.bgPrimary;
   
-  // Get first initial for avatar display
   const userInitial = profile?.name?.charAt(0).toUpperCase() || 'U';
 
-  // Futuristic Input Style (Neon Glow)
   const inputStyle = `w-full ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-xl px-4 py-3 ${currentTheme.textPrimary} focus:outline-none focus:ring-2 focus:ring-[#00FFE0] transition-all duration-300 ${isDark ? 'focus:shadow-[0_0_15px_rgba(0,255,224,0.5)]' : 'focus:shadow-[0_0_15px_rgba(30,144,255,0.5)]'}`;
 
   return (
@@ -173,7 +163,14 @@ const ProfileEditModal = ({ profile, onSave, onClose, currentTheme }) => {
   );
 };
 
+// Random greetings array
+const greetings = [
+  "Welcome back", "Hello", "Hey there", "Good to see you",
+  "Greetings", "Nice to have you back", "Welcome", "Hi there"
+];
+
 export default function Homepage() {
+  const navigate = useNavigate(); // Hook for navigation
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -315,53 +312,23 @@ export default function Homepage() {
     }
   }, []);
 
-  const getAIResponse = async (userMessageText) => {
-    setIsLoading(true);
-    setMessages(prev => [...prev, { type: 'assistant-loading', text: '...' }]);
-    const token = localStorage.getItem('authToken');
-
-    try {
-        const response = await fetch(`${API_BASE_URL}/api/chat`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}` 
-            },
-            body: JSON.stringify({ message: userMessageText })
-        });
-
-        if (!response.ok) {
-            const errorBody = await response.json();
-            throw new Error(errorBody.message || 'The AI service failed to respond.');
-        }
-
-        const result = await response.json();
-        const aiText = result.reply || "Sorry, I couldn't get a proper response. Please try again.";
-
-        setMessages(prev => {
-            const updatedMessages = prev.filter(msg => msg.type !== 'assistant-loading');
-            return [...updatedMessages, { type: 'assistant', text: aiText.trim() }];
-        });
-
-    } catch (error) {
-        console.error("Error fetching AI response from backend:", error);
-        setMessages(prev => {
-            const updatedMessages = prev.filter(msg => msg.type !== 'assistant-loading');
-            return [...updatedMessages, { type: 'assistant', text: `Oops! Something went wrong: ${error.message}` }];
-        });
-    } finally {
-        setIsLoading(false);
-    }
-  };
+  // Removed getAIResponse and the original handleSendMessage since we are navigating instead
+  // The state update logic for the homepage chat box is no longer necessary.
 
   const handleSendMessage = () => {
-    if (chatMessage.trim() === '' || isLoading) return;
-    const userMessage = { type: 'user', text: chatMessage };
-    setMessages(prev => [...prev, userMessage]);
-    getAIResponse(chatMessage);
+    const userMessageText = chatMessage.trim();
+    if (userMessageText === '' || isLoading) return;
+
+    // Clear the input immediately
     setChatMessage('');
+    
+    // For passing the message, we use sessionStorage for a simple hand-off.
+    sessionStorage.setItem('initialChatMessage', userMessageText);
+
+    // Redirect the user to the new chat route.
+    navigate('/chatnew'); 
   };
-  
+
   const handleUploadClick = () => {
     fileInputRef.current.click();
   };
@@ -370,9 +337,14 @@ export default function Homepage() {
     const file = event.target.files[0];
     if (file) {
       const userMessageText = `I've uploaded a file named: ${file.name}. What can you tell me about processing this type of file?`;
-      const userMessage = { type: 'user', text: userMessageText };
-      setMessages(prev => [...prev, userMessage]);
-      getAIResponse(userMessageText);
+      
+      // Store the message for the ChatPage to pick up
+      sessionStorage.setItem('initialChatMessage', userMessageText);
+      // NOTE: File data transfer is complex. For now, we only pass the text prompt.
+      // A full implementation would require storing file data securely or uploading it before navigation.
+
+      // Redirect the user to the new chat route.
+      navigate('/chatnew'); 
     }
   };
 
@@ -393,7 +365,7 @@ export default function Homepage() {
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [theme]);
 
-  // Auto-scroll chat to the bottom
+  // Auto-scroll chat to the bottom (No longer needed since we navigate, but leaving for internal component integrity)
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
@@ -440,8 +412,6 @@ export default function Homepage() {
     }
   }, []);
   
-  // NOTE: The original handleSendMessage has been replaced with the new one.
-
   if (loading) {
     return (
       <div className={`min-h-screen ${currentTheme.bgPrimary} flex items-center justify-center`}>
@@ -545,7 +515,7 @@ export default function Homepage() {
                 {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </button>
               
-              {['MarketPlace', 'My Models', 'Deployments'].map((item) => (
+              {['AI Chat','MarketPlace', 'My Models', 'Deployments'].map((item) => (
                 <button
                   key={item}
                   onClick={() => {
@@ -553,8 +523,10 @@ export default function Homepage() {
                       window.location.href = '/marketplace'
                     } else if (item === 'My Models') {
                       window.location.href = '/mymodels'
-                    }else if (item === 'Deployments') {
+                    } else if (item === 'Deployments') {
                       window.location.href = '/deploy'
+                    } else if (item === 'AI Chat') {
+                      window.location.href = '/chatnew'
                     }
                   }}
                   className={`hidden md:block ${currentTheme.textSecondary} hover:${

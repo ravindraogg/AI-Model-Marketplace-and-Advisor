@@ -918,6 +918,7 @@ export default function Marketplace({ theme, currentTheme, toggleTheme }) {
       </div>
       
       <div className="fixed bottom-8 right-8 z-50">
+        <Link to = "/chatnew">
 <div 
   className={`absolute bottom-full right-0 mb-4 transition-all duration-300 ease-out 
               ${showAIChatPopup ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2 pointer-events-none'}`}
@@ -931,10 +932,12 @@ export default function Marketplace({ theme, currentTheme, toggleTheme }) {
     }}
     // Removed the inline transform style here
   >
+
     {/* Removed the inner div and its transform style. It's no longer needed. */}
     <div className="flex items-center justify-start mb-2">
       <Zap className={`w-5 h-5 ${isDark ? 'text-[#00FFE0]' : 'text-[#1E90FF]'}`} />
     </div>
+    
     <p className={`text-sm ${currentTheme.textPrimary} leading-snug text-left whitespace-nowrap`}>
       {aiChatPopupMessage}
     </p>
@@ -945,6 +948,7 @@ export default function Marketplace({ theme, currentTheme, toggleTheme }) {
     </div>
   </div>
 </div>
+    </Link>
 
         <button 
             onClick={() => {
