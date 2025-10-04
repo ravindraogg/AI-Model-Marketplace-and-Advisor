@@ -19,11 +19,7 @@ import { Cerebras } from '@cerebras/cerebras_cloud_sdk';
 import cors from 'cors';
 
 // Allow only your frontend origin
-app.use(cors({
-    origin: 'https://modelnest.vercel.app',
-    methods: ['GET', 'POST', 'PUT', 'DELETE'], // optional, you can specify allowed methods
-    credentials: true // if you want to send cookies/auth headers
-}));
+
 
 // Load environment variables from .env file
 dotenv.config();
@@ -220,7 +216,11 @@ const protect = (req, res, next) => {
 // --- 4. EXPRESS APP SETUP ---
 const app = express();
 app.use(express.json()); 
-app.use(cors('*'));      
+app.use(cors({
+    origin: 'https://modelnest.vercel.app',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true
+}));  
 
 // --- 5. HELPER FUNCTIONS: DEPLOYMENT STREAMING ---
 
