@@ -7,6 +7,7 @@ import Marketplace from './pages/marketplace';
 import ModelDetail from './pages/ModelDetail';
 import MyModels from './pages/mymodel';
 import DeploymentPage from './pages/deploymentpage';
+import ChatPage from './pages/chatpage';
 //Shared Theme and Color Configuration
 const colorScheme = {
     light: {
@@ -62,7 +63,8 @@ function App() {
                         />
                     } 
                 />
-                
+                <Route path="/chatnew/:message" element={<ChatPage />} />
+
                 <Route 
                     path="/mainpage" 
                     element={
@@ -109,6 +111,25 @@ function App() {
                     path="/deploy" 
                     element={
                         <DeploymentPage 
+                            theme={theme} 
+                            currentTheme={currentTheme} 
+                            toggleTheme={toggleTheme} 
+                        />
+                    } 
+                />
+                <Route 
+                    path="/chatnew"
+                    element={
+                        <ChatPage
+                            theme={theme} 
+                            currentTheme={currentTheme} 
+                            toggleTheme={toggleTheme} 
+                        />
+                    } 
+                /><Route 
+                    path="/chat/:chatId" 
+                    element={
+                        <ChatPage
                             theme={theme} 
                             currentTheme={currentTheme} 
                             toggleTheme={toggleTheme} 

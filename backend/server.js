@@ -5,9 +5,25 @@ import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import axios from "axios";
+// Import required Node.js core modules
+import fs from "fs"; 
+import { pipeline } from "stream/promises"; 
+import path from "path"; 
+// Import required npm packages
+import FormData from "form-data"; 
+
+// --- SDK Import ---
+// NOTE: Using require() for the SDK is common in mixed module environments
+import { Cerebras } from '@cerebras/cerebras_cloud_sdk'; 
+
 
 // Load environment variables from .env file
 dotenv.config();
+
+// Initialize Cerebras SDK Client
+const cerebrasClient = new Cerebras({
+    apiKey: process.env.CEREBRAS_API_KEY,
+});
 
 // --- 1. DATABASE CONNECTION ---
 const connectDB = async () => {
@@ -39,9 +55,24 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
+const chatSessionSchema = new mongoose.Schema(
+    {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        title: { type: String, required: true, default: 'New Chat' },
+        createdAt: { type: Date, default: Date.now },
+        updatedAt: { type: Date, default: Date.now }
+    }
+);
+const ChatSession = mongoose.model("ChatSession", chatSessionSchema);
 const User = mongoose.model("User", userSchema);
-
+const chatMessageSchema = new mongoose.Schema(
+    {
+        chatId: { type: mongoose.Schema.Types.ObjectId, ref: 'ChatSession', required: true },
+        role: { type: String, required: true, enum: ['user', 'assistant'] },
+        text: { type: String, required: true },
+        timestamp: { type: Date, default: Date.now }
+    }
+);
 /**
  * @desc Schema for models favorited by a user.
  */
@@ -64,7 +95,7 @@ favoriteModelSchema.pre('save', function(next) {
 });
 
 const FavoriteModel = mongoose.model("FavoriteModel", favoriteModelSchema);
-
+const ChatMessage = mongoose.model("ChatMessage", chatMessageSchema);
 /**
  * @desc Schema for custom models trained by a user.
  */
@@ -123,37 +154,15 @@ const deploymentRecordSchema = new mongoose.Schema(
 
 const DeploymentRecord = mongoose.model("DeploymentRecord", deploymentRecordSchema);
 
+// Add after other schemas
+const dailyChatLimitSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+    date: { type: String, required: true }, // Format: YYYY-MM-DD
+    count: { type: Number, default: 0 }
+}, { timestamps: true });
 
+const DailyChatLimit = mongoose.model("DailyChatLimit", dailyChatLimitSchema);
 // --- 3. MIDDLEWARE ---
-
-/**
- * @desc Protect routes by verifying JWT token.
- * Attaches user ID to the request object if the token is valid.
- * @param {object} req - Express request object
- * @param {object} res - Express response object
- * @param {function} next - Express next middleware function
- */
-const protect = (req, res, next) => {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) {
-    return res.status(401).json({ message: "No token, authorization denied" });
-  }
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded.id;
-    next();
-  } catch (error) {
-    res.status(401).json({ message: "Token is not valid" });
-  }
-};
-
-// --- 4. EXPRESS APP SETUP ---
-const app = express();
-app.use(express.json()); // Body parser for JSON
-app.use(cors('*'));      // Enable Cross-Origin Resource Sharing
-
-// --- 5. HELPER FUNCTIONS ---
 
 /**
  * @desc Generates consistent mock performance data for models based on their name.
@@ -171,8 +180,302 @@ const generateMockMetrics = (name) => {
         downloads: parseFloat(((hash % 100 / 10) + 1).toFixed(1)),
     };
 };
+const protect = (req, res, next) => {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({ message: "No token, authorization denied" });
+  }
+
+  try {
+    // Assuming req.user is populated with the user's MongoDB ID
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded.id; 
+    next();
+  } catch (error) {
+    res.status(401).json({ message: "Token is not valid" });
+  }
+};
+
+// --- 4. EXPRESS APP SETUP ---
+const app = express();
+app.use(express.json()); 
+app.use(cors('*'));      
+
+// --- 5. HELPER FUNCTIONS ---
+// ... (generateMockMetrics and other helpers are assumed here) ...
 
 // --- 6. ROUTE DEFINITIONS ---
+
+// ======== CHAT HISTORY ROUTES (NEW) ========
+
+/**
+ * @route POST /api/chats
+ * @desc Create a new chat session
+ * @access Private
+ */
+app.post('/api/chats', protect, async (req, res) => {
+    try {
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        
+        // Check daily limit
+        let limitDoc = await DailyChatLimit.findOne({ userId: req.user });
+        
+        if (!limitDoc || limitDoc.date !== today) {
+            // Reset or create new limit for today
+            limitDoc = await DailyChatLimit.findOneAndUpdate(
+                { userId: req.user },
+                { date: today, count: 1 },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+            );
+        } else {
+            if (limitDoc.count >= 5) {
+                return res.status(429).json({ 
+                    message: "Daily chat limit reached. You can create 5 new chats per day." 
+                });
+            }
+            limitDoc.count += 1;
+            await limitDoc.save();
+        }
+
+        const newChat = new ChatSession({ 
+            userId: req.user,
+            title: req.body.title || 'New Chat' 
+        });
+        await newChat.save();
+        
+        res.status(201).json({ id: newChat._id.toString(), title: newChat.title });
+    } catch (error) {
+        console.error("Error creating chat:", error);
+        res.status(500).json({ message: "Failed to create chat session." });
+    }
+});
+app.get('/api/chats/daily-limit', protect, async (req, res) => {
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        const limitDoc = await DailyChatLimit.findOne({ userId: req.user });
+        
+        if (!limitDoc || limitDoc.date !== today) {
+            return res.json({ remaining: 5, used: 0 });
+        }
+        
+        res.json({ remaining: Math.max(0, 5 - limitDoc.count), used: limitDoc.count });
+    } catch (error) {
+        console.error("Error checking daily limit:", error);
+        res.status(500).json({ message: "Failed to check daily limit." });
+    }
+});
+/**
+ * @route GET /api/chats
+ * @desc Get all chat sessions for the user
+ * @access Private
+ */
+app.get('/api/chats', protect, async (req, res) => {
+    try {
+        const chats = await ChatSession.find({ userId: req.user }).sort({ updatedAt: -1 });
+        // Map _id to id for React convention
+        const mappedChats = chats.map(chat => ({ 
+            id: chat._id.toString(), 
+            title: chat.title, 
+            createdAt: chat.createdAt, 
+            updatedAt: chat.updatedAt 
+        }));
+        res.json(mappedChats);
+    } catch (error) {
+        console.error("Error fetching chats:", error);
+        res.status(500).json({ message: "Failed to fetch chat history." });
+    }
+});
+
+/**
+ * @route PUT /api/chats/:chatId
+ * @desc Rename a chat session
+ * @access Private
+ */
+app.put('/api/chats/:chatId', protect, async (req, res) => {
+    const { chatId } = req.params;
+    const { title } = req.body;
+    try {
+        const chat = await ChatSession.findOneAndUpdate(
+            { _id: chatId, userId: req.user },
+            { title, updatedAt: new Date() },
+            { new: true }
+        );
+        if (!chat) return res.status(404).json({ message: "Chat not found or unauthorized." });
+        res.json({ message: "Chat renamed successfully." });
+    } catch (error) {
+        console.error("Error renaming chat:", error);
+        res.status(500).json({ message: "Failed to rename chat." });
+    }
+});
+
+/**
+ * @route DELETE /api/chats/:chatId
+ * @desc Delete a chat session and its messages
+ * @access Private
+ */
+app.delete('/api/chats/:chatId', protect, async (req, res) => {
+    const { chatId } = req.params;
+    try {
+        const chatResult = await ChatSession.deleteOne({ _id: chatId, userId: req.user });
+        if (chatResult.deletedCount === 0) return res.status(404).json({ message: "Chat not found or unauthorized." });
+        
+        // Delete all associated messages
+        await ChatMessage.deleteMany({ chatId: chatId });
+
+        res.json({ message: "Chat and messages deleted successfully." });
+    } catch (error) {
+        console.error("Error deleting chat:", error);
+        res.status(500).json({ message: "Failed to delete chat." });
+    }
+});
+
+// ======== CHAT MESSAGE ROUTES (NEW) ========
+
+/**
+ * @route GET /api/chats/:chatId/messages
+ * @desc Get all messages for a chat session
+ * @access Private
+ */
+app.get('/api/chats/:chatId/messages', protect, async (req, res) => {
+    const { chatId } = req.params;
+    try {
+        const chat = await ChatSession.findOne({ _id: chatId, userId: req.user });
+        if (!chat) return res.status(404).json({ message: "Chat session not found." });
+
+        const messages = await ChatMessage.find({ chatId }).sort({ timestamp: 1 });
+        // Map _id to id for React convention
+        const mappedMessages = messages.map(msg => ({
+            id: msg._id.toString(),
+            role: msg.role,
+            text: msg.text,
+            timestamp: msg.timestamp
+        }));
+        res.json(mappedMessages);
+    } catch (error) {
+        console.error("Error fetching messages:", error);
+        res.status(500).json({ message: "Failed to fetch messages." });
+    }
+});
+
+/**
+ * @route POST /api/chats/:chatId/messages
+ * @desc Add a message to a chat session
+ * @access Private
+ */
+app.post('/api/chats/:chatId/messages', protect, async (req, res) => {
+    const { chatId } = req.params;
+    const { role, text } = req.body;
+    
+    if (!role || !text) return res.status(400).json({ message: "Role and text are required." });
+
+    try {
+        const chat = await ChatSession.findOne({ _id: chatId, userId: req.user });
+        if (!chat) return res.status(404).json({ message: "Chat session not found." });
+
+        const newMessage = new ChatMessage({ chatId, role, text });
+        await newMessage.save();
+
+        // Update the chat session's last activity time
+        chat.updatedAt = new Date();
+        await chat.save();
+        
+        res.status(201).json({ message: "Message added successfully." });
+    } catch (error) {
+        console.error("Error adding message:", error);
+        res.status(500).json({ message: "Failed to add message." });
+    }
+});
+
+// ======== AI TRAINING ROUTE (KAGGLE/CEREBRAS HYBRID) ========
+
+/**
+ * @route POST /api/train-model
+ * @desc Uses Llama on Cerebras to generate a complete PyTorch Kaggle Notebook script.
+ * @access Private
+ */
+app.post("/api/train-model", protect, async (req, res) => {
+  // Destructure the file data and training parameters
+  const {
+    fileName,
+    // Keep fileContentBase64 in destructure, but we won't use it for the LLM prompt
+    fileContentBase64, 
+    modelName = "llama-3.1-8b",
+    taskDescription, // <-- what the model should learn
+    framework = "pytorch", // Assume PyTorch as requested
+    hyperparameters = { batch_size: 32, epochs: 3, learning_rate: 0.0001 }
+  } = req.body;
+
+  const cerebrasToken = process.env.CEREBRAS_API_KEY; 
+
+  if (!taskDescription || !fileName) {
+    return res.status(400).json({ message: "Training objective and fileName are required." });
+  }
+
+  if (!cerebrasToken) {
+    console.error("Cerebras token is not configured on the server for code generation.");
+    return res.status(500).json({ message: "AI code generation service is not configured (Cerebras API Key missing)." });
+  }
+
+  // --- 1. Llama-based Guidance and Notebook Generation ---
+  // We use Llama to generate the complete Kaggle Notebook script.
+
+  const systemPrompt = `You are an expert PyTorch and Kaggle MLOps engineer. Your task is to generate a complete, single Python code block representing a runnable Kaggle Notebook script. This script must:
+1. Include all necessary imports (pandas, torch, nn, optim, matplotlib).
+2. Load the dataset (assume the user has uploaded the file named '${fileName}' and it's available at '../input/user-uploaded-dataset/${fileName}' or a mock equivalent if the path is unknown). Assume a simple CSV structure for tabular data.
+3. Define a simple PyTorch neural network (e.g., a simple linear classifier) suitable for the general classification task derived from: '${taskDescription}'.
+4. Include a training loop running for ${hyperparameters.epochs} epochs with batch size ${hyperparameters.batch_size} and learning rate ${hyperparameters.learning_rate}. Mock data generation is acceptable for the training loop if the exact dataset structure cannot be inferred.
+5. Track and plot the training loss and accuracy over epochs using Matplotlib, saving the plot to 'training_report.png' in the current working directory. The plot must show the graphical report requested by the user.
+6. Calculate and print a final mock accuracy (e.g., 88.5%).
+7. Save the trained PyTorch model state dictionary to a file named 'trained_model.pth' in the '/kaggle/working/' directory using torch.save.
+8. Print a final success message including the final accuracy and the name of the saved model file.
+
+CRITICAL: The output MUST be ONLY one Python code block enclosed in \`\`\`python ... \`\`\` and should be directly runnable in a Kaggle notebook environment. DO NOT include any conversational text or explanations outside the code block.`;
+
+  const userPrompt = `Generate the PyTorch training script for the dataset file '${fileName}' with the objective: '${taskDescription}'. The model should be a simple ${framework} model and save the final output as 'trained_model.pth'.`;
+
+  const apiUrl = `https://api.cerebras.ai/v1/chat/completions`;
+
+  const payload = {
+    model: "llama-4-scout-17b-16e-instruct", 
+    messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": userPrompt }],
+    max_tokens: 4096, // Increased tokens for the large script output
+    temperature: 0.2, 
+  };
+
+  let aiText;
+  try {
+    const cbResponse = await axios.post(apiUrl, payload, {
+      headers: { 'Authorization': `Bearer ${cerebrasToken}` }
+    });
+    aiText = cbResponse.data.choices?.[0]?.message?.content;
+    
+    if (!aiText) {
+         return res.status(500).json({ message: "AI response was empty." });
+    }
+    
+    // --- 2. Return the generated script and instructions ---
+    // Extract the Python code block (assuming it starts with ```python)
+    const pythonCodeMatch = aiText.match(/```python\s*([\s\S]*?)```/i);
+    const generatedScript = pythonCodeMatch ? pythonCodeMatch[1].trim() : aiText.trim();
+
+
+    res.status(200).json({ 
+        message: "Kaggle Notebook script successfully generated.", 
+        ai_script: generatedScript,
+        fileName: fileName,
+        taskDescription: taskDescription,
+        status: "Script Generated"
+    });
+
+  } catch (err) {
+    const message = err.response?.data?.message || err.message;
+    console.error("AI Notebook Generation Error:", message);
+    res.status(500).json({ message: `AI Notebook Generation failed: ${message}` });
+  }
+});
+
+
+// --- 6. ROUTE DEFINITIONS --- (CONTINUED)
 
 // ======== AUTHENTICATION ROUTES (Omitted for brevity, assumed functional) ========
 
@@ -259,7 +562,7 @@ app.put('/api/profile', protect, async (req, res) => {
 
 const fetchHuggingFaceModels = async () => {
     try {
-      const response = await axios.get("https://huggingface.co/api/models?limit=50");
+      const response = await axios.get("[https://huggingface.co/api/models?limit=50](https://huggingface.co/api/models?limit=50)");
       return response.data.map(model => ({
         ...generateMockMetrics(model.modelId),
         platform: "Hugging Face",
@@ -278,7 +581,7 @@ const fetchHuggingFaceModels = async () => {
 const fetchReplicateModels = async () => {
     if (!process.env.REPLICATE_API_KEY) return [];
     try {
-      const response = await axios.get("https://api.replicate.com/v1/models", {
+      const response = await axios.get("[https://api.replicate.com/v1/models](https://api.replicate.com/v1/models)", {
         headers: { Authorization: `Token ${process.env.REPLICATE_API_KEY}` }
       });
       return response.data.results.map(model => ({
@@ -299,7 +602,7 @@ const fetchReplicateModels = async () => {
 const fetchOpenAIModels = async () => {
     if (!process.env.OPENAI_API_KEY) return [];
     try {
-        const response = await axios.get("https://api.openai.com/v1/models", {
+        const response = await axios.get("[https://api.openai.com/v1/models](https://api.openai.com/v1/models)", {
             headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
         });
         return response.data.data.map(model => ({
@@ -512,7 +815,7 @@ app.get('/api/models/deployed', protect, async (req, res) => {
 
         res.json(mappedDeployedModels);
     } catch (error) {
-        console.error("Get Deployed Models Error:", error);
+        console.error("Get Deployed Models Error:", error.message);
         res.status(500).json({ message: "Server error while fetching deployed models." });
     }
 });
@@ -664,45 +967,38 @@ app.get('/api/deployment/docker-credentials', protect, async (req, res) => {
 
 /**
  * @route   POST /api/chat
- * @desc    Proxy general chat messages to Cerebras API
+ * @desc    Proxy general chat messages to Cerebras API using the official SDK
  * @access  Private
  */
 app.post("/api/chat", protect, async (req, res) => {
   const { message } = req.body;
-  const cerebrasToken = process.env.CEREBRAS_API_KEY; // Using Cerebras token
-
+  
   if (!message) return res.status(400).json({ message: "Message is required." });
-  if (!cerebrasToken) {
+  if (!process.env.CEREBRAS_API_KEY) {
     console.error("Cerebras token is not configured on the server.");
     return res.status(500).json({ message: "AI service is not configured." });
   }
 
   const systemPrompt = `You are a world-class AI Training Advisor named ModelNest. Your goal is to help users with their AI projects by recommending the perfect models or guiding them on training custom ones. Keep your responses concise, helpful, and friendly. You are powered by Meta Llama on Cerebras hardware.`;
   
-  // Cerebras API URL
-  const apiUrl = "https://api.cerebras.ai/v1/chat/completions";
-  
-  // Model name. The documentation shows that "llama3.1-8b" and "llama-3.3-70b" are available.
-  const model = "llama-4-scout-17b-16e-instruct";
-
-  const payload = {
-      model: model,
-      messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": message }],
-      max_tokens: 1024,
-      temperature: 0.2, // Lower temperature for more reliable code generation
-  };
-
   try {
-    const cbResponse = await axios.post(apiUrl, payload, {
-        headers: { 'Authorization': `Bearer ${cerebrasToken}` }
+    // --- SDK Implementation for Chat ---
+    const response = await cerebrasClient.chat.completions.create({
+        model: 'llama-4-scout-17b-16e-instruct',
+        messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: message }
+        ],
+        max_tokens: 1024,
+        temperature: 0.2,
     });
     
-    const aiText = cbResponse.data.choices?.[0]?.message?.content;
-    res.json({ reply: aiText || "Sorry, I couldn't get a proper response." });
+    const aiText = response.choices?.[0]?.message?.content;
+    res.json({ reply: aiText || "Sorry, I couldn't get a proper response from the AI." });
 
   } catch (error) {
-    console.error("Cerebras API Error:", error.response ? error.response.data : error.message);
-    res.status(500).json({ message: "AI service is currently unavailable." });
+    console.error("Cerebras SDK Chat Error:", error.message);
+    res.status(500).json({ message: `AI service is currently unavailable: ${error.message}` });
   }
 });
 
