@@ -17,7 +17,8 @@ import FormData from "form-data";
 
 // --- SDK Import ---
 import { Cerebras } from '@cerebras/cerebras_cloud_sdk'; 
-
+import cros from 'cors';
+app.use (cors('https://modelnest.vercel.app'));
 // Load environment variables from .env file
 dotenv.config();
 
