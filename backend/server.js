@@ -803,7 +803,7 @@ app.put('/api/profile', protect, async (req, res) => {
 
 const fetchHuggingFaceModels = async () => {
     try {
-      const response = await axios.get("[https://huggingface.co/api/models](https://huggingface.co/api/models)");
+      const response = await axios.get("https://huggingface.co/api/models");
       return response.data.map(model => ({
         ...generateMockMetrics(model.modelId),
         platform: "Hugging Face",
@@ -822,7 +822,7 @@ const fetchHuggingFaceModels = async () => {
 const fetchReplicateModels = async () => {
     if (!process.env.REPLICATE_API_KEY) return [];
     try {
-      const response = await axios.get("[https://api.replicate.com/v1/models](https://api.replicate.com/v1/models)", {
+      const response = await axios.get("https://api.replicate.com/v1/models", {
         headers: { Authorization: `Token ${process.env.REPLICATE_API_KEY}` }
       });
       return response.data.results.map(model => ({
