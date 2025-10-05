@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Filter, Zap, Star, Users, TrendingUp, Clock, Shuffle, X, BarChart2, MessageSquare, ChevronDown, ChevronUp, Check, ExternalLink, Box, Sun, Moon, Settings, LogOut, Home } from 'lucide-react';
+import { Search, Filter, Zap, Star, Users, TrendingUp, Clock, Shuffle, X, MessageSquare, ExternalLink, Box, Sun, Moon, Home } from 'lucide-react';
 import { Link } from 'react-router-dom';
+
 const API_BASE_URL = import.meta.env.VITE_BASE_URL;
 
 const colorScheme = {
@@ -394,7 +395,7 @@ const calculateRelevance = (model, query) => {
 
 
 // --- Main Marketplace Component ---
-export default function Marketplace({ theme, currentTheme, toggleTheme }) {
+export default function Marketplace({ theme, toggleTheme }) {
   const [allModels, setAllModels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -417,6 +418,8 @@ export default function Marketplace({ theme, currentTheme, toggleTheme }) {
   const [pageSize] = useState(9);
   const [nextModelIndex, setNextModelIndex] = useState(0);
 
+  // Determine the current theme object
+  const currentTheme = theme === 'dark' ? colorScheme.dark : colorScheme.light;
   const isDark = theme === 'dark';
   
   const [profile, setProfile] = useState(null);
@@ -666,6 +669,7 @@ export default function Marketplace({ theme, currentTheme, toggleTheme }) {
           selectedModels={selectedForCompare}
           onClose={() => setShowCompareModal(false)}
           modelsData={allModels}
+          currentTheme={currentTheme} // Pass the currentTheme prop here
         />
       )}
 

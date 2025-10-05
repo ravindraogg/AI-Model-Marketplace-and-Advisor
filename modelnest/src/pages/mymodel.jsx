@@ -373,7 +373,7 @@ export default function MyModels({ theme, toggleTheme }) {
                         {favorites.length > 0 ? (
                             favorites.map((fav, index) => (
                                 <Link 
-                                    to={`/model/${encodeURIComponent(fav.modelName)}`}
+                                    to={`/marketplace/${encodeURIComponent(fav.modelName)}`}
                                     key={index} 
                                     className={`p-5 ${currentTheme.cardSecondaryBg} border ${currentTheme.cardBorder} rounded-2xl flex flex-col justify-between transition-all duration-300 hover:scale-[1.02] hover:shadow-[0_0_20px_rgba(30,144,255,0.4)] hover:border-[#1E90FF]/60`}
                                 >
