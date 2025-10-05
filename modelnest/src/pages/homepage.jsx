@@ -347,6 +347,14 @@ export default function Homepage() {
       navigate('/chatnew'); 
     }
   };
+  
+  const handleSignOut = () => {
+    // Clear all storage
+    localStorage.clear();
+    sessionStorage.clear();
+    // Redirect to the authentication page
+    navigate('/auth');
+  };
 
   // Fetch data on mount
   useEffect(() => {
@@ -406,7 +414,6 @@ export default function Homepage() {
       
     } catch (error) {
       console.error('API Error during profile update:', error);
-      // In a real app, you would show an error notification here.
       // Re-throwing the error to be handled by the modal's catch/finally block
       throw error;
     }
@@ -575,7 +582,10 @@ export default function Homepage() {
                         <span>Settings</span>
                       </button>
                       
-                      <button className={`w-full flex items-center space-x-3 px-4 py-3 hover:bg-red-500/20 rounded-xl transition-all mt-1 text-red-400`}>
+                      <button 
+                        onClick={handleSignOut}
+                        className={`w-full flex items-center space-x-3 px-4 py-3 hover:bg-red-500/20 rounded-xl transition-all mt-1 text-red-400`}
+                      >
                         <LogOut className="w-4 h-4" />
                         <span>Sign Out</span>
                       </button>
@@ -790,7 +800,7 @@ export default function Homepage() {
                           </div>
                         </div>
                         <div className={`flex items-center space-x-1 ${currentTheme.cardBg} border ${currentTheme.cardBorder} px-3 py-1 rounded-full`}>
-                          <Star className={`w-3 h-3 text-yellow-300 fill-yellow-300`} />
+                          <RatingStars rating={model.rating.toFixed(1)} />
                           <span className={`text-xs font-bold ${currentTheme.textPrimary}`}>{model.rating.toFixed(1)}</span>
                         </div>
                       </div>
