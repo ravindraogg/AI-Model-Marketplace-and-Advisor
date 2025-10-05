@@ -289,6 +289,7 @@ export default function LandingPage() {
           </p>
 
           <div className="flex items-center justify-center space-x-6 relative z-10">
+            <Link to = "/auth">
             <button className="group relative px-10 py-5 bg-gradient-to-r from-[#1E90FF] to-[#9B59B6] rounded-xl text-lg font-bold text-white overflow-hidden hover:scale-105 transition-all duration-300 shadow-xl">
               <span className="relative z-10 flex items-center space-x-2">
                 <Rocket className="w-5 h-5" />
@@ -297,10 +298,12 @@ export default function LandingPage() {
               <div className="absolute inset-0 bg-[#00FFE0] opacity-0 group-hover:opacity-20 transition-opacity duration-300" />
               <div className="absolute inset-0 shadow-[0_0_30px_rgba(30,144,255,0.6)] opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
             </button>
-            
+            </Link>
+            <a href="https://youtu.be/5Din7BgZNJc" target="_blank" rel="noopener noreferrer">
             <button className={`px-10 py-5 ${currentTheme.cardBg} border-2 ${theme === 'light' ? 'border-gray-300 text-gray-800 hover:border-[#1E90FF] hover:shadow-[0_0_20px_rgba(30,144,255,0.4)]' : 'border-[#1E90FF]/50 text-[#E6E6E6] hover:border-[#00FFE0] hover:shadow-[0_0_20px_rgba(0,255,224,0.4)]'} rounded-xl text-lg font-bold transition-all duration-300`}>
               Watch Demo
             </button>
+            </a>
           </div>
 
           {/* Floating 3D Element Placeholder */}
@@ -443,9 +446,10 @@ export default function LandingPage() {
             <p className={`text-xl mb-10 max-w-2xl mx-auto ${currentTheme.textSecondary}`}>
               Join thousands of developers building the future with ModelNest
             </p>
+            <Link to = "/auth">
             <button className="px-12 py-5 bg-gradient-to-r from-[#1E90FF] to-[#9B59B6] rounded-xl text-xl font-bold text-white hover:scale-105 hover:shadow-[0_0_40px_rgba(30,144,255,0.6)] transition-all duration-300 shadow-xl">
               Start Building Now
-            </button>
+            </button></Link>
           </div>
         </div>
       </section>
